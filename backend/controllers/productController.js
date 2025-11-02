@@ -62,12 +62,12 @@ const updateProduct = async (req, res) => {
     const product = await Product.findById(req.params.id);
 
     if (product) {
-      product.name = name || product.name;
-      product.description = description || product.description;
-      product.price = price || product.price;
-      product.category = category || product.category;
-      product.stock = stock !== undefined ? stock : product.stock;
-      product.imageUrl = imageUrl || product.imageUrl;
+      product.name = name ?? product.name;
+      product.description = description ?? product.description;
+      product.price = price ?? product.price;
+      product.category = category ?? product.category;
+      product.stock = stock ?? product.stock;
+      product.imageUrl = imageUrl ?? product.imageUrl;
 
       const updatedProduct = await product.save();
       res.json(updatedProduct);

@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import Home from './pages/Home';
 import Checkout from './pages/Checkout';
 
@@ -10,8 +10,8 @@ function App() {
         <header style={styles.header}>
           <h1>E-commerce Store</h1>
           <nav>
-            <a href="/" style={styles.link}>Home</a>
-            <a href="/checkout" style={styles.link}>Checkout</a>
+            <Link to="/" style={styles.link}>Home</Link>
+            <Link to="/checkout" style={styles.link}>Checkout</Link>
           </nav>
         </header>
         <main style={styles.main}>
