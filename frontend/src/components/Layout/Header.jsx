@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import ThemeToggle from '../common/ThemeToggle';
-import clsx from 'clsx';
+import { cn } from '../../utils/helpers';
 
 /**
  * Header component with responsive navigation
@@ -108,7 +108,7 @@ const Header = () => {
 
         {/* Mobile Navigation */}
         <div
-          className={clsx(
+          className={cn(
             'md:hidden overflow-hidden transition-all duration-300 ease-in-out',
             isMobileMenuOpen ? 'max-h-64 pb-4' : 'max-h-0'
           )}

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTheme } from '../../hooks/useTheme';
-import clsx from 'clsx';
+import { cn } from '../../utils/helpers';
 
 /**
  * ThemeToggle component for switching between themes
@@ -38,7 +38,7 @@ const ThemeToggle = () => {
           {themeConfig[theme]?.name}
         </span>
         <svg
-          className={clsx(
+          className={cn(
             'w-4 h-4 transition-transform duration-300',
             isOpen && 'rotate-180'
           )}
@@ -66,7 +66,7 @@ const ThemeToggle = () => {
               <button
                 key={themeName}
                 onClick={() => handleThemeChange(themeName)}
-                className={clsx(
+                className={cn(
                   'w-full flex items-center gap-3 px-4 py-3 text-left transition-all duration-200',
                   'hover:bg-[var(--bg-primary)] hover:pl-6',
                   theme === themeName && 'bg-[var(--bg-primary)] font-semibold'

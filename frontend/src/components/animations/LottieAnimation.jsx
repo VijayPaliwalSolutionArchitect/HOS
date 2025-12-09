@@ -1,6 +1,6 @@
 import { forwardRef } from 'react';
 import Lottie from 'lottie-react';
-import clsx from 'clsx';
+import { cn } from '../../utils/helpers';
 
 /**
  * LottieAnimation wrapper component
@@ -28,7 +28,7 @@ const LottieAnimation = forwardRef(({
   if (!animationData) {
     return (
       <div
-        className={clsx('flex items-center justify-center', className)}
+        className={cn('flex items-center justify-center', className)}
         style={{ width, height }}
       >
         <p className="text-[var(--text-secondary)]">No animation data</p>
@@ -42,7 +42,7 @@ const LottieAnimation = forwardRef(({
   };
 
   return (
-    <div ref={ref} className={clsx('lottie-container', className)}>
+    <div ref={ref} className={cn('lottie-container', className)}>
       <Lottie
         animationData={animationData}
         loop={loop}

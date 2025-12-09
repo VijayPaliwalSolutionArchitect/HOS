@@ -1,5 +1,5 @@
 import { forwardRef } from 'react';
-import clsx from 'clsx';
+import { cn } from '../../utils/helpers';
 
 /**
  * Animated Card component
@@ -27,7 +27,7 @@ const Card = forwardRef(({
   return (
     <div
       ref={ref}
-      className={clsx(
+      className={cn(
         baseStyles,
         hoverStyles,
         clickableStyles,

@@ -1,5 +1,5 @@
 import { forwardRef } from 'react';
-import clsx from 'clsx';
+import { cn } from '../../utils/helpers';
 
 /**
  * Reusable Button component with multiple variants
@@ -39,7 +39,7 @@ const Button = forwardRef(({
     <button
       ref={ref}
       disabled={disabled}
-      className={clsx(
+      className={cn(
         baseStyles,
         variants[variant],
         sizes[size],
