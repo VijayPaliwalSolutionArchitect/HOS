@@ -85,7 +85,11 @@ export default function QuizPage() {
       attemptId: uuidv4(),
       quizSetId: quizSet.id,
       quizTitle: quizSet.title,
-      questions: mockQuestions.slice(0, quizSet.totalQuestions).map((q, i) => ({ ...q, order: i + 1 })),
+      questions: mockQuestions.slice(0, quizSet.totalQuestions).map((q, i) => ({ 
+        ...q, 
+        order: i + 1,
+        type: q.type as 'SINGLE_CHOICE' | 'MULTIPLE_CHOICE' | 'TRUE_FALSE' | 'FILL_BLANK'
+      })),
       duration: quizSet.duration,
     });
     setShowStartModal(false);
