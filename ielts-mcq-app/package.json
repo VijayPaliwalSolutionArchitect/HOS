@@ -23,6 +23,7 @@
     "gsap": "^3.12.5",
     "lucide-react": "^0.453.0",
     "next": "14.2.15",
+    "next-themes": "^0.4.6",
     "openai": "^4.68.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -31,6 +32,7 @@
     "recharts": "^2.13.0",
     "tailwind-merge": "^2.5.4",
     "uuid": "^10.0.0",
+    "zod": "^4.3.5",
     "zustand": "^5.0.0"
   },
   "devDependencies": {
