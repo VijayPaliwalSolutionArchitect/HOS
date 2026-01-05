@@ -7,9 +7,9 @@
   "/quiz/[slug]/page": "app/quiz/[slug]/page.js",
   "/quiz/sets/page": "app/quiz/sets/page.js",
   "/settings/page": "app/settings/page.js",
-  "/register/page": "app/register/page.js",
   "/login/page": "app/login/page.js",
+  "/register/page": "app/register/page.js",
   "/admin/page": "app/admin/page.js",
-  "/admin/sets/page": "app/admin/sets/page.js",
-  "/admin/users/page": "app/admin/users/page.js"
+  "/admin/users/page": "app/admin/users/page.js",
+  "/admin/sets/page": "app/admin/sets/page.js"
 }
