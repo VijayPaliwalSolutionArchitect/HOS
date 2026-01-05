@@ -23,6 +23,7 @@ export interface QuizQuestion {
   text: string;
   type: 'SINGLE_CHOICE' | 'MULTIPLE_CHOICE' | 'TRUE_FALSE' | 'FILL_BLANK';
   timeLimit: number;
+  difficulty?: string;
   options: {
     id: string;
     text: string;
