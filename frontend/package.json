@@ -29,7 +29,7 @@
     "sonner": "^1.4.0",
     "tailwind-merge": "^2.2.1",
     "tailwindcss-animate": "^1.0.7",
-    "zustand": "^4.5.0"
+    "zustand": "^5.0.10"
   },
   "devDependencies": {
     "autoprefixer": "^10.4.17",
