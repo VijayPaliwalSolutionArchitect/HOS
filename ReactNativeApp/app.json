@@ -1,1 +1,59 @@
+{
+  "expo": {
+    "name": "HOS Mobile",
+    "slug": "hos-mobile",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "scheme": "hosmobile",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/images/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#4F46E5"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.hos.mobile",
+      "config": {
+        "usesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/adaptive-icon.png",
+        "backgroundColor": "#4F46E5"
+      },
+      "package": "com.hos.mobile",
+      "permissions": [
+        "android.permission.INTERNET"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/images/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "hos-mobile-2026"
+      }
+    }
+  }
+}
 {\n  "expo": {\n    "name": "HOS Mobile",\n    "slug": "hos-mobile",\n    "version": "1.0.0",\n    "orientation": "portrait",\n    "icon": "./assets/images/icon.png",\n    "scheme": "hos",\n    "userInterfaceStyle": "automatic",\n    "newArchEnabled": true,\n    "splash": {\n      "image": "./assets/images/splash-icon.png",\n      "resizeMode": "contain",\n      "backgroundColor": "#4F46E5"\n    },\n    "assetBundlePatterns": ["**/*"],\n    "ios": {\n      "supportsTablet": true,\n      "bundleIdentifier": "com.hos.mobile",\n      "config": {\n        "usesNonExemptEncryption": false\n      }\n    },\n    "android": {\n      "adaptiveIcon": {\n        "foregroundImage": "./assets/images/adaptive-icon.png",\n        "backgroundColor": "#4F46E5"\n      },\n      "package": "com.hos.mobile",\n      "edgeToEdgeEnabled": true\n    },\n    "web": {\n      "bundler": "metro",\n      "output": "static",\n      "favicon": "./assets/images/favicon.png"\n    },\n    "plugins": [\n      "expo-router",\n      "expo-secure-store",\n      "expo-font",\n      [\n        "expo-splash-screen",\n        {\n          "backgroundColor": "#4F46E5",\n          "image": "./assets/images/splash-icon.png",\n          "imageWidth": 200\n        }\n      ]\n    ],\n    "experiments": {\n      "typedRoutes": true\n    },\n    "extra": {\n      "router": {\n        "origin": false\n      },\n      "eas": {\n        "projectId": "your-project-id"\n      }\n    },\n    "owner": "hos"\n  }\n}
