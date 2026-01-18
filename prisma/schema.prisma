@@ -1,0 +1,455 @@
+// ===========================================
+// Prisma Schema for IELTS MCQ App
+// ===========================================
+// Database: PostgreSQL
+// ORM: Prisma
+// ===========================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["fullTextSearch"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ===========================================
+// ENUMS
+// ===========================================
+
+// User roles for access control
+enum Role {
+  USER
+  ADMIN
+  SUPER_ADMIN
+}
+
+// Quiz topic categories
+enum QuizTopic {
+  READING
+  LISTENING
+  WRITING
+  SPEAKING
+  GENERAL
+  VOCABULARY
+  GRAMMAR
+}
+
+// Difficulty levels
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+  EXPERT
+}
+
+// Question types
+enum QuestionType {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+  FILL_BLANK
+}
+
+// Attempt status
+enum AttemptStatus {
+  IN_PROGRESS
+  PAUSED
+  COMPLETED
+  ABANDONED
+}
+
+// User theme preference
+enum Theme {
+  LIGHT
+  DARK
+  SYSTEM
+}
+
+// Badge rarity levels
+enum BadgeRarity {
+  COMMON
+  RARE
+  EPIC
+  LEGENDARY
+}
+
+// Achievement categories
+enum AchievementCategory {
+  PRACTICE
+  STREAK
+  SCORE
+  SOCIAL
+  MILESTONE
+}
+
+// ===========================================
+// MODELS
+// ===========================================
+
+// User model with gamification features
+model User {
+  id              String    @id @default(uuid())
+  name            String?
+  email           String    @unique
+  emailVerified   DateTime?
+  image           String?
+  password        String?   // Hashed password for credentials auth
+  role            Role      @default(USER)
+  
+  // Profile information
+  bio             String?
+  targetBand      Float?    @default(7.0)
+  country         String?
+  timezone        String?   @default("UTC")
+  
+  // Gamification stats
+  xpPoints        Int       @default(0)
+  level           Int       @default(1)
+  streak          Int       @default(0)
+  longestStreak   Int       @default(0)
+  lastActive      DateTime  @default(now())
+  
+  // Preferences
+  theme           Theme     @default(SYSTEM)
+  notifications   Boolean   @default(true)
+  soundEnabled    Boolean   @default(true)
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  // Relations
+  accounts        Account[]
+  sessions        Session[]
+  quizSets        QuizSet[]   @relation("CreatedBy")
+  attempts        Attempt[]
+  badges          UserBadge[]
+  achievements    UserAchievement[]
+  
+  @@index([email])
+  @@index([xpPoints])
+}
+
+// OAuth Account model (for future Google OAuth integration)
+model Account {
+  id                String  @id @default(uuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+// Session model for authentication
+model Session {
+  id           String   @id @default(uuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId])
+}
+
+// Verification token for email verification
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+  
+  @@unique([identifier, token])
+}
+
+// Quiz Set - Collection of questions
+model QuizSet {
+  id               String      @id @default(uuid())
+  title            String
+  slug             String      @unique
+  description      String?
+  topic            QuizTopic   @default(GENERAL)
+  difficulty       Difficulty  @default(MEDIUM)
+  
+  // Status
+  active           Boolean     @default(true)
+  featured         Boolean     @default(false)
+  
+  // Quiz configuration
+  duration         Int         @default(30) // Duration in minutes
+  totalQuestions   Int         @default(0)
+  passScore        Int         @default(60) // Pass percentage
+  
+  // Media
+  thumbnail        String?
+  thumbnailBlurhash String?
+  
+  // Metadata
+  tags             String[]    @default([])
+  
+  // Analytics
+  viewCount        Int         @default(0)
+  attemptCount     Int         @default(0)
+  avgScore         Float?      @default(0)
+  avgBandScore     Float?      @default(0)
+  
+  // Publishing
+  publishedAt      DateTime?
+  expiresAt        DateTime?
+  
+  // Timestamps
+  createdAt        DateTime    @default(now())
+  updatedAt        DateTime    @updatedAt
+  
+  // Relations
+  createdById      String
+  createdBy        User        @relation("CreatedBy", fields: [createdById], references: [id])
+  questions        Question[]
+  attempts         Attempt[]
+  
+  @@index([slug])
+  @@index([topic])
+  @@index([difficulty])
+  @@index([active])
+}
+
+// Question model
+model Question {
+  id            String       @id @default(uuid())
+  order         Int          @default(0)
+  text          String       // Question text (supports HTML/markdown)
+  type          QuestionType @default(SINGLE_CHOICE)
+  
+  // Time limit per question (in seconds, 0 = no limit)
+  timeLimit     Int          @default(60)
+  
+  // Explanation shown after answering
+  explanation   String?
+  
+  // Media attachments
+  imageUrl      String?
+  audioUrl      String?
+  videoUrl      String?
+  
+  // Difficulty and analytics
+  difficulty    Difficulty   @default(MEDIUM)
+  correctRate   Float?       @default(0) // Percentage of correct answers
+  avgTimeSpent  Float?       @default(0) // Average time spent in seconds
+  
+  // Options as JSON: [{id: string, text: string, isCorrect: boolean}]
+  options       Json
+  
+  // Timestamps
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  
+  // Relations
+  quizSetId     String
+  quizSet       QuizSet      @relation(fields: [quizSetId], references: [id], onDelete: Cascade)
+  answers       Answer[]
+  
+  @@index([quizSetId])
+  @@index([order])
+}
+
+// Quiz Attempt - User's attempt at a quiz
+model Attempt {
+  id              String        @id @default(uuid())
+  slug            String        @unique @default(uuid())
+  
+  // Timing
+  startedAt       DateTime      @default(now())
+  completedAt     DateTime?
+  timeTaken       Int?          // Total time in seconds
+  pausedDuration  Int           @default(0) // Total paused time in seconds
+  
+  // Scoring
+  score           Float?        // Percentage score
+  bandScore       Float?        // IELTS band score (1-9)
+  totalQuestions  Int           @default(0)
+  correctAnswers  Int           @default(0)
+  
+  // Status
+  completed       Boolean       @default(false)
+  status          AttemptStatus @default(IN_PROGRESS)
+  
+  // Section scores (for mixed quizzes)
+  readingScore    Float?
+  listeningScore  Float?
+  writingScore    Float?
+  speakingScore   Float?
+  
+  // Device info
+  deviceType      String?       // mobile, tablet, desktop
+  browserInfo     String?
+  
+  // Snapshot of answers as JSON (for quick access)
+  answers         Json?         @default("[]")
+  
+  // Timestamps
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  
+  // Relations
+  userId          String
+  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  quizSetId       String
+  quizSet         QuizSet       @relation(fields: [quizSetId], references: [id])
+  detailedAnswers Answer[]
+  result          Result?
+  
+  @@index([userId])
+  @@index([quizSetId])
+  @@index([slug])
+  @@index([status])
+}
+
+// Individual Answer record
+model Answer {
+  id              String    @id @default(uuid())
+  
+  // Selected answer
+  selectedOption  String?   // Option ID selected
+  isCorrect       Boolean   @default(false)
+  
+  // Time tracking
+  timeSpent       Int?      // Time spent on this question in seconds
+  
+  // Additional metadata
+  confidence      Int?      // User's confidence level (1-5)
+  flaggedForReview Boolean  @default(false)
+  reviewedAt      DateTime?
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  
+  // Relations
+  questionId      String
+  question        Question  @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  attemptId       String
+  attempt         Attempt   @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  
+  @@unique([attemptId, questionId])
+  @@index([attemptId])
+  @@index([questionId])
+}
+
+// Result - Generated after quiz completion
+model Result {
+  id              String    @id @default(uuid())
+  
+  // PDF generation
+  pdfUrl          String?
+  pdfGeneratedAt  DateTime?
+  
+  // Email delivery
+  sentToEmail     String?
+  sentAt          DateTime?
+  emailOpenedAt   DateTime?
+  
+  // Viewing stats
+  viewed          Boolean   @default(false)
+  viewedAt        DateTime?
+  viewCount       Int       @default(0)
+  
+  // AI-generated insights (JSON)
+  aiInsights      Json?
+  
+  // Sharing
+  shareToken      String?   @unique @default(uuid())
+  shareCount      Int       @default(0)
+  
+  // Timestamps
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  
+  // Relations
+  attemptId       String    @unique
+  attempt         Attempt   @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  
+  @@index([shareToken])
+}
+
+// Badge - Collectible achievements
+model Badge {
+  id          String      @id @default(uuid())
+  name        String      @unique
+  description String
+  icon        String      // Emoji or icon name
+  rarity      BadgeRarity @default(COMMON)
+  xpReward    Int         @default(50)
+  
+  // Unlock criteria as JSON
+  criteria    Json?
+  
+  // Timestamps
+  createdAt   DateTime    @default(now())
+  
+  // Relations
+  users       UserBadge[]
+}
+
+// User-Badge junction table
+model UserBadge {
+  id        String   @id @default(uuid())
+  earnedAt  DateTime @default(now())
+  
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  badgeId   String
+  badge     Badge    @relation(fields: [badgeId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, badgeId])
+  @@index([userId])
+}
+
+// Achievement - Progress-based goals
+model Achievement {
+  id          String              @id @default(uuid())
+  name        String              @unique
+  description String
+  icon        String              // Emoji or icon name
+  category    AchievementCategory @default(PRACTICE)
+  xpReward    Int                 @default(100)
+  
+  // Target value for completion
+  targetValue Int                 @default(1)
+  
+  // Unlock criteria as JSON
+  criteria    Json?
+  
+  // Timestamps
+  createdAt   DateTime            @default(now())
+  
+  // Relations
+  users       UserAchievement[]
+}
+
+// User-Achievement junction table with progress tracking
+model UserAchievement {
+  id            String      @id @default(uuid())
+  progress      Int         @default(0)
+  completed     Boolean     @default(false)
+  completedAt   DateTime?
+  
+  userId        String
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  
+  @@unique([userId, achievementId])
+  @@index([userId])
+}
