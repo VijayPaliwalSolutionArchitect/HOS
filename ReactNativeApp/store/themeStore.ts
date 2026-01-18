@@ -20,19 +20,19 @@ export const useThemeStore = create<ThemeStore>((set, get) => ({
   isSystemTheme: true,
 
   setColorScheme: async (scheme) => {
-    set({ colorScheme: scheme });
     await storage.setItem(STORAGE_KEYS.THEME, {
       colorScheme: scheme,
       isSystemTheme: get().isSystemTheme,
     });
+    set({ colorScheme: scheme });
   },
 
   setSystemTheme: async (useSystem) => {
-    set({ isSystemTheme: useSystem });
     await storage.setItem(STORAGE_KEYS.THEME, {
       colorScheme: get().colorScheme,
       isSystemTheme: useSystem,
     });
+    set({ isSystemTheme: useSystem });
   },
 
   toggleTheme: () => {

@@ -15,9 +15,9 @@ export default function TabLayout() {
         tabBarStyle: {
           backgroundColor: colors.card,
           borderTopColor: colors.border,
-          height: 60,
-          paddingBottom: 8,
-          paddingTop: 8,
+          height: theme.spacing['4xl'] + 28, // 64 + 28 = 92 total height
+          paddingBottom: theme.spacing.sm,
+          paddingTop: theme.spacing.sm,
           ...theme.shadows.lg,
         },
         tabBarLabelStyle: {
