@@ -216,25 +216,29 @@ const Notifications = () => {
               title: 'Total Sent',
               value: campaigns.filter(c => c.status === 'sent').reduce((acc, c) => acc + (c.sent_to || 0), 0),
               icon: Send,
-              color: 'indigo',
+              bgColor: 'bg-indigo-500/10',
+              iconColor: 'text-indigo-500',
             },
             {
               title: 'Opened',
               value: campaigns.filter(c => c.status === 'sent').reduce((acc, c) => acc + (c.opened || 0), 0),
               icon: Mail,
-              color: 'green',
+              bgColor: 'bg-green-500/10',
+              iconColor: 'text-green-500',
             },
             {
               title: 'Clicked',
               value: campaigns.filter(c => c.status === 'sent').reduce((acc, c) => acc + (c.clicked || 0), 0),
               icon: Target,
-              color: 'orange',
+              bgColor: 'bg-orange-500/10',
+              iconColor: 'text-orange-500',
             },
             {
               title: 'Campaigns',
               value: campaigns.length,
               icon: Bell,
-              color: 'pink',
+              bgColor: 'bg-pink-500/10',
+              iconColor: 'text-pink-500',
             },
           ].map((stat, i) => (
             <motion.div
@@ -250,8 +254,8 @@ const Notifications = () => {
                       <p className="text-sm text-muted-foreground mb-1">{stat.title}</p>
                       <p className="text-3xl font-bold">{stat.value}</p>
                     </div>
-                    <div className={`w-12 h-12 rounded-xl bg-${stat.color}-500/10 flex items-center justify-center`}>
-                      <stat.icon className={`w-6 h-6 text-${stat.color}-500`} />
+                    <div className={`w-12 h-12 rounded-xl ${stat.bgColor} flex items-center justify-center`}>
+                      <stat.icon className={`w-6 h-6 ${stat.iconColor}`} />
                     </div>
                   </div>
                 </CardContent>

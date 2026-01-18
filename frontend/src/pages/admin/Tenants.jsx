@@ -286,25 +286,29 @@ const Tenants = () => {
               title: 'Total Tenants',
               value: tenants.length,
               icon: Building2,
-              color: 'indigo',
+              bgColor: 'bg-indigo-500/10',
+              iconColor: 'text-indigo-500',
             },
             {
               title: 'Active Tenants',
               value: tenants.filter(t => t.is_active).length,
               icon: CheckCircle,
-              color: 'green',
+              bgColor: 'bg-green-500/10',
+              iconColor: 'text-green-500',
             },
             {
               title: 'Pro+ Subscribers',
               value: tenants.filter(t => ['pro', 'enterprise'].includes(t.subscription_tier)).length,
               icon: Users,
-              color: 'orange',
+              bgColor: 'bg-orange-500/10',
+              iconColor: 'text-orange-500',
             },
             {
               title: 'Total Users',
               value: tenants.reduce((acc, t) => acc + (t.user_count || 0), 0),
               icon: Users,
-              color: 'pink',
+              bgColor: 'bg-pink-500/10',
+              iconColor: 'text-pink-500',
             },
           ].map((stat, i) => (
             <motion.div
@@ -320,8 +324,8 @@ const Tenants = () => {
                       <p className="text-sm text-muted-foreground mb-1">{stat.title}</p>
                       <p className="text-3xl font-bold">{stat.value}</p>
                     </div>
-                    <div className={`w-12 h-12 rounded-xl bg-${stat.color}-500/10 flex items-center justify-center`}>
-                      <stat.icon className={`w-6 h-6 text-${stat.color}-500`} />
+                    <div className={`w-12 h-12 rounded-xl ${stat.bgColor} flex items-center justify-center`}>
+                      <stat.icon className={`w-6 h-6 ${stat.iconColor}`} />
                     </div>
                   </div>
                 </CardContent>

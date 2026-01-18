@@ -100,6 +100,7 @@ const Billing = () => {
       ],
       color: 'secondary',
       icon: Package,
+      iconColor: 'text-gray-500',
     },
     {
       name: 'Basic',
@@ -114,6 +115,7 @@ const Billing = () => {
       ],
       color: 'default',
       icon: Zap,
+      iconColor: 'text-blue-500',
     },
     {
       name: 'Pro',
@@ -129,6 +131,7 @@ const Billing = () => {
       ],
       color: 'warning',
       icon: Crown,
+      iconColor: 'text-yellow-500',
       popular: true,
     },
     {
@@ -146,6 +149,7 @@ const Billing = () => {
       ],
       color: 'success',
       icon: Database,
+      iconColor: 'text-green-500',
     },
   ];
 
@@ -237,7 +241,8 @@ const Billing = () => {
                     current: usage?.users.current,
                     limit: usage?.users.limit,
                     icon: Users,
-                    color: 'indigo',
+                    barColor: 'bg-indigo-500',
+                    iconColor: 'text-indigo-500',
                   },
                   {
                     label: 'Storage',
@@ -245,21 +250,24 @@ const Billing = () => {
                     limit: usage?.storage.limit,
                     unit: 'GB',
                     icon: Database,
-                    color: 'green',
+                    barColor: 'bg-green-500',
+                    iconColor: 'text-green-500',
                   },
                   {
                     label: 'Exams',
                     current: usage?.exams.current,
                     limit: usage?.exams.limit,
                     icon: Package,
-                    color: 'orange',
+                    barColor: 'bg-orange-500',
+                    iconColor: 'text-orange-500',
                   },
                   {
                     label: 'API Calls',
                     current: usage?.api_calls.current,
                     limit: usage?.api_calls.limit,
                     icon: Zap,
-                    color: 'pink',
+                    barColor: 'bg-pink-500',
+                    iconColor: 'text-pink-500',
                   },
                 ].map((item, idx) => {
                   const percentage = (item.current / item.limit) * 100;
@@ -267,7 +275,7 @@ const Billing = () => {
                     <div key={idx} className="space-y-2">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                          <item.icon className={`w-5 h-5 text-${item.color}-500`} />
+                          <item.icon className={`w-5 h-5 ${item.iconColor}`} />
                           <span className="font-medium">{item.label}</span>
                         </div>
                         <span className="text-sm text-muted-foreground">
@@ -276,7 +284,7 @@ const Billing = () => {
                       </div>
                       <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
                         <div
-                          className={`h-full bg-${item.color}-500 transition-all`}
+                          className={`h-full ${item.barColor} transition-all`}
                           style={{ width: `${Math.min(percentage, 100)}%` }}
                         />
                       </div>
@@ -313,7 +321,7 @@ const Billing = () => {
                 )}
                 <CardContent className="pt-6">
                   <div className="text-center mb-6">
-                    <plan.icon className={`w-12 h-12 mx-auto mb-3 text-${plan.color}-500`} />
+                    <plan.icon className={`w-12 h-12 mx-auto mb-3 ${plan.iconColor}`} />
                     <h3 className="text-2xl font-bold mb-2">{plan.name}</h3>
                     <div className="mb-4">
                       {plan.price !== null ? (
