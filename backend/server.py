@@ -1,39 +1,40 @@
 """
-EduExam Pro - Online Courses & Examination SaaS Platform
-=========================================================
-A comprehensive multi-tenant EdTech platform with:
-- Role-based access control (STUDENT, TEACHER, MANAGER, ADMIN)
-- Course and content management
-- Dynamic examination system
-- AI-powered question generation
-- Real-time analytics and reporting
+EduExam Pro - Complete Backend API
+===================================
+Enterprise-grade Online Courses & Examination SaaS Platform
 
-Technology Stack:
-- FastAPI (Backend API)
-- MongoDB (Database)
-- JWT (Authentication)
-- OpenAI GPT (AI Integration)
+ARCHITECTURE:
+- FastAPI with modular routes
+- MongoDB with proper indexing
+- JWT authentication with refresh tokens
+- Role-based access control (RBAC)
+- Audit logging for compliance
+- Multi-tenant data isolation
+
+AI INTEGRATION:
+- AI features are implemented but COMMENTED OUT
+- See /app/docs/AI_INTEGRATION.md for configuration
+- Manual workflows provided as fallback
 """
 
 import os
 import json
-import asyncio
+import random
 from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 from enum import Enum
 from bson import ObjectId
 
-from fastapi import FastAPI, HTTPException, Depends, status, Query, Body
+from fastapi import FastAPI, HTTPException, Depends, status, Query, Body, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel, Field, EmailStr, field_validator
+from pydantic import BaseModel, Field, EmailStr
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from passlib.context import CryptContext
 from jose import JWTError, jwt
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
 # ===========================================
@@ -42,17 +43,16 @@ load_dotenv()
 
 MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("DB_NAME", "edtech_saas")
-JWT_SECRET = os.environ.get("JWT_SECRET", "your-super-secret-jwt-key")
+JWT_SECRET = os.environ.get("JWT_SECRET", "your-super-secret-jwt-key-change-in-production")
 JWT_ALGORITHM = os.environ.get("JWT_ALGORITHM", "HS256")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 REFRESH_TOKEN_EXPIRE_DAYS = int(os.environ.get("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
-AI_ENABLED = os.environ.get("AI_ENABLED", "true").lower() == "true"
+
+# AI Configuration (DISABLED BY DEFAULT - See docs/AI_INTEGRATION.md)
+AI_ENABLED = os.environ.get("AI_ENABLED", "false").lower() == "true"
 EMERGENT_LLM_KEY = os.environ.get("EMERGENT_LLM_KEY", "")
 
-# Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
-# Security
 security = HTTPBearer()
 
 # ===========================================
@@ -91,10 +91,41 @@ class AttemptStatus(str, Enum):
     EVALUATED = "EVALUATED"
     EXPIRED = "EXPIRED"
 
+class SubscriptionPlan(str, Enum):
+    FREE = "FREE"
+    PRO = "PRO"
+    INSTITUTION = "INSTITUTION"
+    ENTERPRISE = "ENTERPRISE"
+
+class SubscriptionStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    CANCELLED = "CANCELLED"
+    EXPIRED = "EXPIRED"
+    TRIAL = "TRIAL"
+
+class NotificationType(str, Enum):
+    EXAM_ASSIGNED = "EXAM_ASSIGNED"
+    EXAM_REMINDER = "EXAM_REMINDER"
+    RESULT_PUBLISHED = "RESULT_PUBLISHED"
+    COURSE_UPDATE = "COURSE_UPDATE"
+    SYSTEM_ALERT = "SYSTEM_ALERT"
+    PROMOTION = "PROMOTION"
+
+class AuditAction(str, Enum):
+    CREATE = "CREATE"
+    UPDATE = "UPDATE"
+    DELETE = "DELETE"
+    LOGIN = "LOGIN"
+    LOGOUT = "LOGOUT"
+    EXAM_START = "EXAM_START"
+    EXAM_SUBMIT = "EXAM_SUBMIT"
+    PUBLISH = "PUBLISH"
+
 # ===========================================
-# PYDANTIC MODELS - REQUEST/RESPONSE
+# PYDANTIC MODELS
 # ===========================================
 
+# --- Auth Models ---
 class UserCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=100)
     email: EmailStr
@@ -116,6 +147,7 @@ class UserResponse(BaseModel):
     xp_points: int = 0
     level: int = 1
     streak: int = 0
+    is_active: bool = True
     created_at: datetime
 
 class TokenResponse(BaseModel):
@@ -124,23 +156,45 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user: UserResponse
 
+# --- Tenant Models ---
+class TenantCreate(BaseModel):
+    name: str = Field(..., min_length=2, max_length=100)
+    domain: Optional[str] = None
+    logo: Optional[str] = None
+    settings: Optional[Dict[str, Any]] = None
+
+class TenantUpdate(BaseModel):
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    logo: Optional[str] = None
+    settings: Optional[Dict[str, Any]] = None
+    is_active: Optional[bool] = None
+
+# --- Subscription Models ---
+class SubscriptionCreate(BaseModel):
+    tenant_id: str
+    plan: SubscriptionPlan = SubscriptionPlan.FREE
+    status: SubscriptionStatus = SubscriptionStatus.TRIAL
+
+# --- Category Models ---
 class CategoryCreate(BaseModel):
     name: str = Field(..., min_length=2, max_length=100)
     slug: str = Field(..., min_length=2, max_length=100)
     description: Optional[str] = None
     parent_id: Optional[str] = None
     icon: Optional[str] = None
+    order: int = 0
 
-class CategoryResponse(BaseModel):
-    id: str
-    name: str
-    slug: str
-    description: Optional[str]
-    parent_id: Optional[str]
-    icon: Optional[str]
-    is_active: bool
-    created_at: datetime
+class CategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    slug: Optional[str] = None
+    description: Optional[str] = None
+    parent_id: Optional[str] = None
+    icon: Optional[str] = None
+    order: Optional[int] = None
+    is_active: Optional[bool] = None
 
+# --- Course Models ---
 class CourseCreate(BaseModel):
     title: str = Field(..., min_length=3, max_length=200)
     description: str
@@ -150,24 +204,21 @@ class CourseCreate(BaseModel):
     difficulty: DifficultyLevel = DifficultyLevel.MEDIUM
     is_featured: bool = False
     tags: List[str] = []
+    syllabus: Optional[List[Dict[str, Any]]] = None
 
-class CourseResponse(BaseModel):
-    id: str
-    title: str
-    description: str
-    category_id: str
-    thumbnail: Optional[str]
-    duration_hours: Optional[int]
-    difficulty: DifficultyLevel
-    is_featured: bool
-    tags: List[str]
-    instructor_id: str
-    instructor_name: Optional[str]
-    enrollment_count: int
-    rating: float
-    is_published: bool
-    created_at: datetime
+class CourseUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category_id: Optional[str] = None
+    thumbnail: Optional[str] = None
+    duration_hours: Optional[int] = None
+    difficulty: Optional[DifficultyLevel] = None
+    is_featured: Optional[bool] = None
+    tags: Optional[List[str]] = None
+    syllabus: Optional[List[Dict[str, Any]]] = None
+    is_published: Optional[bool] = None
 
+# --- Question Models ---
 class QuestionCreate(BaseModel):
     category_id: str
     type: QuestionType
@@ -179,24 +230,24 @@ class QuestionCreate(BaseModel):
     marks: int = Field(default=1, ge=1, le=100)
     negative_marks: float = Field(default=0, ge=0)
     tags: List[str] = []
-    case_context: Optional[str] = None  # For case-based questions
+    case_context: Optional[str] = None
+    blooms_level: Optional[str] = None  # Remember, Understand, Apply, Analyze, Evaluate, Create
 
-class QuestionResponse(BaseModel):
-    id: str
-    category_id: str
-    type: QuestionType
-    text: str
-    options: Optional[List[Dict[str, Any]]]
-    correct_answer: Any
-    explanation: Optional[str]
-    difficulty: DifficultyLevel
-    marks: int
-    negative_marks: float
-    tags: List[str]
-    case_context: Optional[str]
-    created_by: str
-    created_at: datetime
+class QuestionUpdate(BaseModel):
+    category_id: Optional[str] = None
+    type: Optional[QuestionType] = None
+    text: Optional[str] = None
+    options: Optional[List[Dict[str, Any]]] = None
+    correct_answer: Optional[Any] = None
+    explanation: Optional[str] = None
+    difficulty: Optional[DifficultyLevel] = None
+    marks: Optional[int] = None
+    negative_marks: Optional[float] = None
+    tags: Optional[List[str]] = None
+    case_context: Optional[str] = None
+    is_active: Optional[bool] = None
 
+# --- Exam Models ---
 class ExamCreate(BaseModel):
     title: str = Field(..., min_length=3, max_length=200)
     description: Optional[str] = None
@@ -211,90 +262,64 @@ class ExamCreate(BaseModel):
     allow_review: bool = True
     negative_marking: bool = False
     question_ids: List[str] = []
+    # Exam generation rules
+    rules: Optional[Dict[str, Any]] = None  # {easy: 5, medium: 10, hard: 5}
 
-class ExamResponse(BaseModel):
-    id: str
-    title: str
-    description: Optional[str]
-    category_id: str
-    duration_minutes: int
-    total_marks: int
-    passing_marks: int
-    instructions: Optional[str]
-    shuffle_questions: bool
-    shuffle_options: bool
-    show_result_immediately: bool
-    allow_review: bool
-    negative_marking: bool
-    status: ExamStatus
-    question_count: int
-    created_by: str
-    version: int
-    created_at: datetime
+class ExamUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    category_id: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    total_marks: Optional[int] = None
+    passing_marks: Optional[int] = None
+    instructions: Optional[str] = None
+    shuffle_questions: Optional[bool] = None
+    shuffle_options: Optional[bool] = None
+    show_result_immediately: Optional[bool] = None
+    allow_review: Optional[bool] = None
+    negative_marking: Optional[bool] = None
+    question_ids: Optional[List[str]] = None
+    status: Optional[ExamStatus] = None
 
-class ExamAttemptCreate(BaseModel):
-    exam_id: str
-
+# --- Exam Attempt Models ---
 class AnswerSubmit(BaseModel):
     question_id: str
     answer: Any
     time_spent_seconds: int = 0
+    flagged: bool = False
 
 class AttemptSubmit(BaseModel):
     answers: List[AnswerSubmit]
 
-class AttemptResultResponse(BaseModel):
-    id: str
-    exam_id: str
-    exam_title: str
-    user_id: str
-    score: int
-    total_marks: int
-    percentage: float
-    passed: bool
-    correct_count: int
-    incorrect_count: int
-    unanswered_count: int
-    time_taken_seconds: int
-    started_at: datetime
-    submitted_at: datetime
-    detailed_results: Optional[List[Dict[str, Any]]] = None
+# --- Notification Models ---
+class NotificationCreate(BaseModel):
+    title: str
+    message: str
+    type: NotificationType
+    target_role: Optional[UserRole] = None
+    target_user_id: Optional[str] = None
+    link: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
 
+# --- AI Request Models (For future use) ---
 class AIQuestionGenerate(BaseModel):
     category_id: str
     topic: str
     difficulty: DifficultyLevel = DifficultyLevel.MEDIUM
     question_type: QuestionType = QuestionType.MCQ_SINGLE
     count: int = Field(default=5, ge=1, le=20)
+    blooms_level: Optional[str] = None
+    exam_type: Optional[str] = None  # IELTS, Competitive, Academic, etc.
 
-class TenantCreate(BaseModel):
-    name: str = Field(..., min_length=2, max_length=100)
-    domain: Optional[str] = None
-    logo: Optional[str] = None
-    settings: Optional[Dict[str, Any]] = None
-
-class TenantResponse(BaseModel):
-    id: str
-    name: str
-    domain: Optional[str]
-    logo: Optional[str]
-    settings: Optional[Dict[str, Any]]
-    is_active: bool
-    created_at: datetime
-
-class DashboardStats(BaseModel):
-    total_users: int
-    total_courses: int
-    total_exams: int
-    total_questions: int
-    total_attempts: int
-    recent_enrollments: int
-    active_users_today: int
-    average_score: float
-    pass_rate: float
+class AICourseGenerate(BaseModel):
+    title: str
+    audience: str
+    duration_weeks: int
+    difficulty: DifficultyLevel
+    learning_style: Optional[str] = None
 
 # ===========================================
-# DATABASE CONNECTION & LIFECYCLE
+# DATABASE & LIFECYCLE
 # ===========================================
 
 client: MongoClient = None
@@ -302,43 +327,43 @@ db = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifecycle management"""
     global client, db
-    # Startup
     client = MongoClient(MONGO_URL)
     db = client[DB_NAME]
     
-    # Create indexes for better performance
+    # Create indexes
     db.users.create_index([("email", ASCENDING)], unique=True)
     db.users.create_index([("tenant_id", ASCENDING)])
-    db.categories.create_index([("slug", ASCENDING), ("tenant_id", ASCENDING)], unique=True)
+    db.users.create_index([("role", ASCENDING)])
+    db.categories.create_index([("slug", ASCENDING), ("tenant_id", ASCENDING)])
+    db.categories.create_index([("parent_id", ASCENDING)])
     db.courses.create_index([("category_id", ASCENDING)])
+    db.courses.create_index([("is_published", ASCENDING)])
     db.questions.create_index([("category_id", ASCENDING), ("difficulty", ASCENDING)])
+    db.questions.create_index([("tags", ASCENDING)])
     db.exams.create_index([("category_id", ASCENDING), ("status", ASCENDING)])
+    db.exams.create_index([("version", ASCENDING)])
     db.exam_attempts.create_index([("user_id", ASCENDING), ("exam_id", ASCENDING)])
+    db.audit_logs.create_index([("tenant_id", ASCENDING), ("created_at", DESCENDING)])
+    db.notifications.create_index([("user_id", ASCENDING), ("is_read", ASCENDING)])
     
-    # Seed default data if empty
     await seed_default_data()
-    
     print(f"✅ Connected to MongoDB: {DB_NAME}")
     yield
-    
-    # Shutdown
     client.close()
     print("❌ Disconnected from MongoDB")
 
 # ===========================================
-# FASTAPI APPLICATION
+# FASTAPI APP
 # ===========================================
 
 app = FastAPI(
     title="EduExam Pro API",
-    description="Online Courses & Examination SaaS Platform",
-    version="1.0.0",
+    description="Enterprise-grade Online Courses & Examination SaaS Platform",
+    version="2.0.0",
     lifespan=lifespan
 )
 
-# CORS Configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -352,40 +377,30 @@ app.add_middleware(
 # ===========================================
 
 def hash_password(password: str) -> str:
-    """Hash a password using bcrypt"""
     return pwd_context.hash(password)
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash"""
     return pwd_context.verify(plain_password, hashed_password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
-    """Create a JWT access token"""
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire, "type": "access"})
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 def create_refresh_token(data: dict) -> str:
-    """Create a JWT refresh token"""
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
     to_encode.update({"exp": expire, "type": "refresh"})
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 def decode_token(token: str) -> dict:
-    """Decode and validate a JWT token"""
     try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload
+        return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except JWTError:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token"
-        )
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 def serialize_doc(doc: dict) -> dict:
-    """Convert MongoDB document to JSON-serializable dict"""
     if doc is None:
         return None
     doc = dict(doc)
@@ -398,48 +413,59 @@ def serialize_doc(doc: dict) -> dict:
             doc[key] = value.isoformat()
     return doc
 
+def log_audit(tenant_id: str, user_id: str, action: str, entity: str, entity_id: str = None, meta: dict = None):
+    """Log an audit event - CRITICAL for compliance"""
+    db.audit_logs.insert_one({
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "action": action,
+        "entity": entity,
+        "entity_id": entity_id,
+        "meta": meta or {},
+        "created_at": datetime.now(timezone.utc)
+    })
+
+def log_telemetry(tenant_id: str, user_id: str, event: str, payload: dict = None):
+    """Log telemetry event for analytics"""
+    db.telemetry_events.insert_one({
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "event": event,
+        "payload": payload or {},
+        "created_at": datetime.now(timezone.utc)
+    })
+
 # ===========================================
-# AUTHENTICATION DEPENDENCIES
+# AUTH DEPENDENCIES
 # ===========================================
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
-    """Get current authenticated user from JWT token"""
-    token = credentials.credentials
-    payload = decode_token(token)
-    
+    payload = decode_token(credentials.credentials)
     if payload.get("type") != "access":
         raise HTTPException(status_code=401, detail="Invalid token type")
-    
     user_id = payload.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
-    
     user = db.users.find_one({"_id": ObjectId(user_id)})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
-    
     return serialize_doc(user)
 
-async def require_role(required_roles: List[UserRole]):
-    """Dependency factory to require specific roles"""
+def require_roles(allowed_roles: List[UserRole]):
     async def role_checker(current_user: dict = Depends(get_current_user)) -> dict:
-        if current_user["role"] not in [r.value for r in required_roles]:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Access denied. Required roles: {[r.value for r in required_roles]}"
-            )
+        if current_user["role"] not in [r.value for r in allowed_roles]:
+            raise HTTPException(status_code=403, detail=f"Access denied. Required: {[r.value for r in allowed_roles]}")
         return current_user
     return role_checker
 
 # ===========================================
-# SEED DEFAULT DATA
+# SEED DATA
 # ===========================================
 
 async def seed_default_data():
-    """Seed database with default data if empty"""
-    # Create default tenant
     if db.tenants.count_documents({}) == 0:
-        default_tenant = {
+        # Create default tenant
+        tenant = {
             "name": "Default Organization",
             "domain": "default",
             "logo": None,
@@ -447,148 +473,182 @@ async def seed_default_data():
             "is_active": True,
             "created_at": datetime.now(timezone.utc)
         }
-        tenant_result = db.tenants.insert_one(default_tenant)
+        tenant_result = db.tenants.insert_one(tenant)
         tenant_id = str(tenant_result.inserted_id)
         
-        # Create admin user
-        admin_user = {
-            "name": "Admin User",
-            "email": "admin@eduexam.com",
-            "password": hash_password("admin123"),
-            "role": UserRole.ADMIN.value,
+        # Create subscription
+        db.subscriptions.insert_one({
             "tenant_id": tenant_id,
-            "avatar": "https://ui-avatars.com/api/?name=Admin&background=4F46E5&color=fff",
-            "xp_points": 5000,
-            "level": 10,
-            "streak": 30,
-            "is_active": True,
+            "plan": SubscriptionPlan.ENTERPRISE.value,
+            "status": SubscriptionStatus.ACTIVE.value,
+            "features": {
+                "max_users": -1,
+                "max_exams": -1,
+                "max_questions": -1,
+                "ai_credits": 1000,
+                "storage_gb": 100
+            },
+            "current_period_start": datetime.now(timezone.utc),
+            "current_period_end": datetime.now(timezone.utc) + timedelta(days=365),
             "created_at": datetime.now(timezone.utc)
-        }
-        db.users.insert_one(admin_user)
+        })
         
-        # Create manager user
-        manager_user = {
-            "name": "Manager User",
-            "email": "manager@eduexam.com",
-            "password": hash_password("manager123"),
-            "role": UserRole.MANAGER.value,
-            "tenant_id": tenant_id,
-            "avatar": "https://ui-avatars.com/api/?name=Manager&background=10B981&color=fff",
-            "xp_points": 3000,
-            "level": 7,
-            "streak": 15,
-            "is_active": True,
-            "created_at": datetime.now(timezone.utc)
-        }
-        db.users.insert_one(manager_user)
+        # Create users
+        users_data = [
+            {"name": "Admin User", "email": "admin@eduexam.com", "password": "admin123", "role": UserRole.ADMIN.value},
+            {"name": "Manager User", "email": "manager@eduexam.com", "password": "manager123", "role": UserRole.MANAGER.value},
+            {"name": "Teacher User", "email": "teacher@eduexam.com", "password": "teacher123", "role": UserRole.TEACHER.value},
+            {"name": "Student User", "email": "student@eduexam.com", "password": "student123", "role": UserRole.STUDENT.value},
+        ]
         
-        # Create teacher user
-        teacher_user = {
-            "name": "Teacher User",
-            "email": "teacher@eduexam.com",
-            "password": hash_password("teacher123"),
-            "role": UserRole.TEACHER.value,
-            "tenant_id": tenant_id,
-            "avatar": "https://ui-avatars.com/api/?name=Teacher&background=F59E0B&color=fff",
-            "xp_points": 2000,
-            "level": 5,
-            "streak": 10,
-            "is_active": True,
-            "created_at": datetime.now(timezone.utc)
-        }
-        teacher_result = db.users.insert_one(teacher_user)
-        teacher_id = str(teacher_result.inserted_id)
+        teacher_id = None
+        for u in users_data:
+            user = {
+                "name": u["name"],
+                "email": u["email"],
+                "password": hash_password(u["password"]),
+                "role": u["role"],
+                "tenant_id": tenant_id,
+                "avatar": f"https://ui-avatars.com/api/?name={u['name'].replace(' ', '+')}&background=4F46E5&color=fff",
+                "xp_points": random.randint(100, 5000),
+                "level": random.randint(1, 10),
+                "streak": random.randint(0, 30),
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc)
+            }
+            result = db.users.insert_one(user)
+            if u["role"] == UserRole.TEACHER.value:
+                teacher_id = str(result.inserted_id)
         
-        # Create student user
-        student_user = {
-            "name": "Student User",
-            "email": "student@eduexam.com",
-            "password": hash_password("student123"),
-            "role": UserRole.STUDENT.value,
-            "tenant_id": tenant_id,
-            "avatar": "https://ui-avatars.com/api/?name=Student&background=EC4899&color=fff",
-            "xp_points": 500,
-            "level": 3,
-            "streak": 5,
-            "is_active": True,
-            "created_at": datetime.now(timezone.utc)
-        }
-        db.users.insert_one(student_user)
-        
-        # Create default categories
-        categories = [
-            {"name": "IELTS", "slug": "ielts", "description": "IELTS Exam Preparation", "icon": "📝"},
-            {"name": "Mathematics", "slug": "mathematics", "description": "Mathematics and Aptitude", "icon": "📐"},
-            {"name": "Science", "slug": "science", "description": "Science and Technology", "icon": "🔬"},
-            {"name": "Computer Science", "slug": "computer-science", "description": "Programming and IT", "icon": "💻"},
-            {"name": "General Knowledge", "slug": "general-knowledge", "description": "GK and Current Affairs", "icon": "🌍"},
-            {"name": "English", "slug": "english", "description": "English Language Skills", "icon": "📚"},
+        # Create categories with hierarchy
+        categories_data = [
+            {"name": "IELTS Preparation", "slug": "ielts", "icon": "📝", "children": [
+                {"name": "Listening", "slug": "ielts-listening", "icon": "🎧"},
+                {"name": "Reading", "slug": "ielts-reading", "icon": "📖"},
+                {"name": "Writing", "slug": "ielts-writing", "icon": "✍️"},
+                {"name": "Speaking", "slug": "ielts-speaking", "icon": "🗣️"},
+            ]},
+            {"name": "Mathematics", "slug": "mathematics", "icon": "📐", "children": [
+                {"name": "Algebra", "slug": "math-algebra", "icon": "➕"},
+                {"name": "Geometry", "slug": "math-geometry", "icon": "📏"},
+                {"name": "Calculus", "slug": "math-calculus", "icon": "∫"},
+            ]},
+            {"name": "Science", "slug": "science", "icon": "🔬", "children": [
+                {"name": "Physics", "slug": "science-physics", "icon": "⚛️"},
+                {"name": "Chemistry", "slug": "science-chemistry", "icon": "🧪"},
+                {"name": "Biology", "slug": "science-biology", "icon": "🧬"},
+            ]},
+            {"name": "Computer Science", "slug": "computer-science", "icon": "💻", "children": [
+                {"name": "Programming", "slug": "cs-programming", "icon": "👨‍💻"},
+                {"name": "Data Structures", "slug": "cs-data-structures", "icon": "🌳"},
+                {"name": "Web Development", "slug": "cs-web-dev", "icon": "🌐"},
+            ]},
+            {"name": "Competitive Exams", "slug": "competitive", "icon": "🏆", "children": [
+                {"name": "IAS/UPSC", "slug": "competitive-ias", "icon": "🇮🇳"},
+                {"name": "Banking", "slug": "competitive-banking", "icon": "🏦"},
+                {"name": "SSC", "slug": "competitive-ssc", "icon": "📋"},
+            ]},
+            {"name": "Corporate Training", "slug": "corporate", "icon": "🏢", "children": [
+                {"name": "Leadership", "slug": "corporate-leadership", "icon": "👔"},
+                {"name": "HR & Management", "slug": "corporate-hr", "icon": "👥"},
+                {"name": "Technical Skills", "slug": "corporate-tech", "icon": "🛠️"},
+            ]},
         ]
         
         category_ids = {}
-        for cat in categories:
-            cat["tenant_id"] = tenant_id
-            cat["parent_id"] = None
-            cat["is_active"] = True
-            cat["created_at"] = datetime.now(timezone.utc)
-            result = db.categories.insert_one(cat)
-            category_ids[cat["slug"]] = str(result.inserted_id)
+        for cat in categories_data:
+            parent = {
+                "name": cat["name"],
+                "slug": cat["slug"],
+                "description": f"{cat['name']} courses and exams",
+                "icon": cat["icon"],
+                "parent_id": None,
+                "order": 0,
+                "tenant_id": tenant_id,
+                "is_active": True,
+                "created_at": datetime.now(timezone.utc)
+            }
+            result = db.categories.insert_one(parent)
+            parent_id = str(result.inserted_id)
+            category_ids[cat["slug"]] = parent_id
+            
+            for i, child in enumerate(cat.get("children", [])):
+                child_doc = {
+                    "name": child["name"],
+                    "slug": child["slug"],
+                    "description": f"{child['name']} content",
+                    "icon": child["icon"],
+                    "parent_id": parent_id,
+                    "order": i,
+                    "tenant_id": tenant_id,
+                    "is_active": True,
+                    "created_at": datetime.now(timezone.utc)
+                }
+                result = db.categories.insert_one(child_doc)
+                category_ids[child["slug"]] = str(result.inserted_id)
         
         # Create sample courses
-        courses = [
+        courses_data = [
             {
-                "title": "IELTS Complete Preparation Course",
-                "description": "Master all four IELTS sections with comprehensive practice materials",
+                "title": "Complete IELTS Preparation Course",
+                "description": "Master all four IELTS sections with comprehensive practice materials and mock tests.",
                 "category_id": category_ids["ielts"],
                 "thumbnail": "https://images.unsplash.com/photo-1456513080510-7bf3a84b82f8?auto=format&fit=crop&w=800&q=80",
-                "duration_hours": 40,
+                "duration_hours": 60,
                 "difficulty": DifficultyLevel.MEDIUM.value,
                 "is_featured": True,
-                "tags": ["ielts", "english", "exam"],
-                "instructor_id": teacher_id,
+                "tags": ["ielts", "english", "exam-prep"],
+                "syllabus": [
+                    {"week": 1, "title": "Introduction to IELTS", "topics": ["Format Overview", "Scoring System", "Time Management"]},
+                    {"week": 2, "title": "Listening Skills", "topics": ["Note Taking", "Following Conversations", "Academic Lectures"]},
+                    {"week": 3, "title": "Reading Strategies", "topics": ["Skimming", "Scanning", "True/False/NG"]},
+                    {"week": 4, "title": "Writing Tasks", "topics": ["Task 1 Charts", "Task 2 Essays", "Grammar Focus"]},
+                ],
                 "enrollment_count": 1250,
                 "rating": 4.8,
-                "is_published": True,
-            },
-            {
-                "title": "Advanced Mathematics for Competitive Exams",
-                "description": "Complete math preparation for various competitive examinations",
-                "category_id": category_ids["mathematics"],
-                "thumbnail": "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?auto=format&fit=crop&w=800&q=80",
-                "duration_hours": 60,
-                "difficulty": DifficultyLevel.HARD.value,
-                "is_featured": True,
-                "tags": ["math", "aptitude", "competitive"],
-                "instructor_id": teacher_id,
-                "enrollment_count": 890,
-                "rating": 4.6,
-                "is_published": True,
             },
             {
                 "title": "Python Programming Fundamentals",
-                "description": "Learn Python from scratch with hands-on projects",
-                "category_id": category_ids["computer-science"],
+                "description": "Learn Python from scratch with hands-on projects and real-world applications.",
+                "category_id": category_ids["cs-programming"],
                 "thumbnail": "https://images.unsplash.com/photo-1526379095098-d400fd0bf935?auto=format&fit=crop&w=800&q=80",
-                "duration_hours": 30,
+                "duration_hours": 40,
                 "difficulty": DifficultyLevel.EASY.value,
-                "is_featured": False,
+                "is_featured": True,
                 "tags": ["python", "programming", "beginner"],
-                "instructor_id": teacher_id,
+                "syllabus": [
+                    {"week": 1, "title": "Getting Started", "topics": ["Installation", "First Program", "Variables"]},
+                    {"week": 2, "title": "Control Flow", "topics": ["Conditions", "Loops", "Functions"]},
+                ],
                 "enrollment_count": 2100,
                 "rating": 4.9,
-                "is_published": True,
-            }
+            },
+            {
+                "title": "Advanced Mathematics for Competitive Exams",
+                "description": "Complete math preparation for IAS, Banking, SSC and other competitive examinations.",
+                "category_id": category_ids["mathematics"],
+                "thumbnail": "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?auto=format&fit=crop&w=800&q=80",
+                "duration_hours": 80,
+                "difficulty": DifficultyLevel.HARD.value,
+                "is_featured": False,
+                "tags": ["math", "competitive", "aptitude"],
+                "syllabus": [],
+                "enrollment_count": 890,
+                "rating": 4.6,
+            },
         ]
         
-        for course in courses:
+        for course in courses_data:
             course["tenant_id"] = tenant_id
+            course["instructor_id"] = teacher_id
+            course["is_published"] = True
             course["created_at"] = datetime.now(timezone.utc)
             db.courses.insert_one(course)
         
-        # Create sample questions for IELTS category
-        ielts_questions = [
+        # Create sample questions for IELTS
+        questions_data = [
             {
-                "category_id": category_ids["ielts"],
+                "category_id": category_ids["ielts-reading"],
                 "type": QuestionType.MCQ_SINGLE.value,
                 "text": "Choose the correct word to complete the sentence: The weather forecast _____ heavy rain tomorrow.",
                 "options": [
@@ -598,121 +658,186 @@ async def seed_default_data():
                     {"id": "d", "text": "predicted"}
                 ],
                 "correct_answer": "a",
-                "explanation": "'Predicts' is correct because the subject 'forecast' is singular and requires a singular verb.",
+                "explanation": "'Predicts' is correct because the subject 'forecast' is singular and requires a singular verb in present tense.",
                 "difficulty": DifficultyLevel.EASY.value,
                 "marks": 1,
-                "negative_marks": 0.25,
+                "negative_marks": 0,
                 "tags": ["grammar", "vocabulary"],
+                "blooms_level": "Remember",
             },
             {
-                "category_id": category_ids["ielts"],
+                "category_id": category_ids["ielts-reading"],
                 "type": QuestionType.TRUE_FALSE.value,
-                "text": "In IELTS Writing Task 2, you should always give your personal opinion.",
+                "text": "In IELTS Writing Task 2, you must always give your personal opinion regardless of the question type.",
                 "options": [
                     {"id": "true", "text": "True"},
                     {"id": "false", "text": "False"}
                 ],
                 "correct_answer": "false",
-                "explanation": "Not all IELTS Writing Task 2 questions require personal opinion. Some ask you to discuss both sides without giving your view.",
+                "explanation": "Not all Task 2 questions require personal opinion. Some ask to discuss both sides without stating your view.",
                 "difficulty": DifficultyLevel.MEDIUM.value,
                 "marks": 1,
                 "negative_marks": 0,
                 "tags": ["writing", "strategy"],
+                "blooms_level": "Understand",
             },
             {
-                "category_id": category_ids["ielts"],
+                "category_id": category_ids["ielts-listening"],
                 "type": QuestionType.MCQ_MULTI.value,
-                "text": "Select ALL the correct ways to improve your IELTS speaking score:",
+                "text": "Select ALL the correct strategies for improving IELTS listening score:",
                 "options": [
-                    {"id": "a", "text": "Practice speaking English daily"},
-                    {"id": "b", "text": "Memorize long, complex answers"},
-                    {"id": "c", "text": "Use a variety of vocabulary"},
-                    {"id": "d", "text": "Speak naturally with proper intonation"}
+                    {"id": "a", "text": "Practice with various English accents"},
+                    {"id": "b", "text": "Only listen to British English"},
+                    {"id": "c", "text": "Read ahead while listening"},
+                    {"id": "d", "text": "Predict answers before listening"}
                 ],
                 "correct_answer": ["a", "c", "d"],
-                "explanation": "Memorizing answers is not recommended as examiners can detect rehearsed responses.",
+                "explanation": "IELTS features various accents, reading ahead helps anticipate, and predicting answers is a key strategy.",
                 "difficulty": DifficultyLevel.MEDIUM.value,
                 "marks": 2,
                 "negative_marks": 0.5,
-                "tags": ["speaking", "tips"],
+                "tags": ["listening", "strategy"],
+                "blooms_level": "Apply",
             },
             {
-                "category_id": category_ids["ielts"],
+                "category_id": category_ids["ielts-reading"],
                 "type": QuestionType.FILL_BLANK.value,
                 "text": "Complete the sentence: The IELTS test has four sections: Listening, Reading, Writing, and _____.",
                 "options": None,
                 "correct_answer": "Speaking",
-                "explanation": "The IELTS test consists of four sections: Listening, Reading, Writing, and Speaking.",
+                "explanation": "The four sections of IELTS are Listening, Reading, Writing, and Speaking.",
                 "difficulty": DifficultyLevel.EASY.value,
                 "marks": 1,
                 "negative_marks": 0,
                 "tags": ["basics", "format"],
+                "blooms_level": "Remember",
             },
             {
-                "category_id": category_ids["ielts"],
+                "category_id": category_ids["ielts-reading"],
                 "type": QuestionType.CASE_BASED.value,
                 "text": "Based on the passage, what is the main argument presented by the author?",
-                "case_context": "Climate change represents one of the most significant challenges facing humanity today. Scientists worldwide have reached a consensus that human activities, particularly the burning of fossil fuels, are the primary cause of global warming. The consequences of inaction could be catastrophic, including rising sea levels, extreme weather events, and widespread biodiversity loss.",
+                "case_context": "Climate change represents one of the most significant challenges facing humanity today. Scientists worldwide have reached a consensus that human activities, particularly the burning of fossil fuels, are the primary cause of global warming. The consequences of inaction could be catastrophic, including rising sea levels, extreme weather events, and widespread biodiversity loss. However, there is still time to mitigate these effects through collective action and policy changes.",
                 "options": [
                     {"id": "a", "text": "Climate change is a natural phenomenon"},
-                    {"id": "b", "text": "Human activities are causing global warming"},
-                    {"id": "c", "text": "Scientists disagree about climate change"},
-                    {"id": "d", "text": "Fossil fuels are beneficial for the environment"}
+                    {"id": "b", "text": "Human activities are causing global warming and action is needed"},
+                    {"id": "c", "text": "Scientists disagree about climate change causes"},
+                    {"id": "d", "text": "It is too late to address climate change"}
                 ],
                 "correct_answer": "b",
-                "explanation": "The passage clearly states that 'human activities, particularly the burning of fossil fuels, are the primary cause of global warming.'",
+                "explanation": "The passage clearly states humans are the 'primary cause' and emphasizes 'there is still time' for action.",
                 "difficulty": DifficultyLevel.HARD.value,
                 "marks": 3,
                 "negative_marks": 0.75,
-                "tags": ["reading", "comprehension"],
-            }
+                "tags": ["reading", "comprehension", "analysis"],
+                "blooms_level": "Analyze",
+            },
+            # Math questions
+            {
+                "category_id": category_ids["math-algebra"],
+                "type": QuestionType.MCQ_SINGLE.value,
+                "text": "Solve for x: 2x + 5 = 15",
+                "options": [
+                    {"id": "a", "text": "x = 5"},
+                    {"id": "b", "text": "x = 10"},
+                    {"id": "c", "text": "x = 7.5"},
+                    {"id": "d", "text": "x = 20"}
+                ],
+                "correct_answer": "a",
+                "explanation": "2x + 5 = 15 → 2x = 10 → x = 5",
+                "difficulty": DifficultyLevel.EASY.value,
+                "marks": 1,
+                "negative_marks": 0.25,
+                "tags": ["algebra", "linear-equations"],
+                "blooms_level": "Apply",
+            },
+            {
+                "category_id": category_ids["cs-programming"],
+                "type": QuestionType.MCQ_SINGLE.value,
+                "text": "What is the output of: print(type([1, 2, 3]))",
+                "options": [
+                    {"id": "a", "text": "<class 'tuple'>"},
+                    {"id": "b", "text": "<class 'list'>"},
+                    {"id": "c", "text": "<class 'array'>"},
+                    {"id": "d", "text": "<class 'set'>"}
+                ],
+                "correct_answer": "b",
+                "explanation": "[1, 2, 3] creates a list in Python, so type() returns <class 'list'>",
+                "difficulty": DifficultyLevel.EASY.value,
+                "marks": 1,
+                "negative_marks": 0,
+                "tags": ["python", "data-types"],
+                "blooms_level": "Remember",
+            },
         ]
         
         question_ids = []
-        for q in ielts_questions:
+        for q in questions_data:
             q["tenant_id"] = tenant_id
             q["created_by"] = teacher_id
             q["is_active"] = True
+            q["is_ai_generated"] = False
             q["created_at"] = datetime.now(timezone.utc)
             result = db.questions.insert_one(q)
             question_ids.append(str(result.inserted_id))
         
         # Create sample exam
-        sample_exam = {
-            "title": "IELTS Practice Test - Reading & Grammar",
-            "description": "Practice test covering reading comprehension and grammar skills",
+        exam = {
+            "title": "IELTS Practice Test - Reading & Listening",
+            "description": "A comprehensive practice test covering reading comprehension and listening skills for IELTS preparation.",
             "category_id": category_ids["ielts"],
-            "duration_minutes": 30,
-            "total_marks": 8,
-            "passing_marks": 5,
-            "instructions": "Read each question carefully. You can navigate between questions using the navigation panel.",
+            "duration_minutes": 45,
+            "total_marks": 10,
+            "passing_marks": 6,
+            "instructions": """
+            <h3>Instructions:</h3>
+            <ul>
+                <li>Read each question carefully before answering</li>
+                <li>You can navigate between questions using the panel on the right</li>
+                <li>Mark questions for review if you're unsure</li>
+                <li>Time will be shown at the top - exam auto-submits when time expires</li>
+                <li>Negative marking applies to some questions</li>
+            </ul>
+            """,
             "shuffle_questions": True,
             "shuffle_options": True,
             "show_result_immediately": True,
             "allow_review": True,
             "negative_marking": True,
-            "question_ids": question_ids,
-            "status": ExamStatus.PUBLISHED.value,
+            "question_ids": question_ids[:5],  # First 5 IELTS questions
+            "rules": {"easy": 2, "medium": 2, "hard": 1},
             "version": 1,
+            "status": ExamStatus.PUBLISHED.value,
             "tenant_id": tenant_id,
             "created_by": teacher_id,
             "created_at": datetime.now(timezone.utc)
         }
-        db.exams.insert_one(sample_exam)
+        db.exams.insert_one(exam)
+        
+        # Create welcome notification
+        db.notifications.insert_one({
+            "tenant_id": tenant_id,
+            "user_id": None,  # All users
+            "title": "Welcome to EduExam Pro! 🎉",
+            "message": "Start your learning journey today. Explore courses, take practice exams, and track your progress.",
+            "type": NotificationType.SYSTEM_ALERT.value,
+            "link": "/student/dashboard",
+            "is_read": False,
+            "created_at": datetime.now(timezone.utc)
+        })
         
         print("✅ Default data seeded successfully")
 
 # ===========================================
-# API ROUTES - HEALTH CHECK
+# API ROUTES - HEALTH
 # ===========================================
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint"""
     return {
         "status": "healthy",
         "service": "EduExam Pro API",
-        "version": "1.0.0",
+        "version": "2.0.0",
+        "ai_enabled": AI_ENABLED,
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
 
@@ -722,16 +847,12 @@ async def health_check():
 
 @app.post("/api/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
-    """Register a new user"""
-    # Check if email exists
     if db.users.find_one({"email": user_data.email.lower()}):
         raise HTTPException(status_code=400, detail="Email already registered")
     
-    # Get default tenant
     tenant = db.tenants.find_one({"domain": "default"})
     tenant_id = str(tenant["_id"]) if tenant else None
     
-    # Create user
     user = {
         "name": user_data.name,
         "email": user_data.email.lower(),
@@ -748,22 +869,20 @@ async def register(user_data: UserCreate):
     
     result = db.users.insert_one(user)
     user["_id"] = result.inserted_id
+    
+    log_audit(tenant_id, str(result.inserted_id), AuditAction.CREATE.value, "user", str(result.inserted_id))
+    
     user_response = serialize_doc(user)
     del user_response["password"]
     
-    # Create tokens
-    access_token = create_access_token({"sub": str(result.inserted_id)})
-    refresh_token = create_refresh_token({"sub": str(result.inserted_id)})
-    
     return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
+        access_token=create_access_token({"sub": str(result.inserted_id)}),
+        refresh_token=create_refresh_token({"sub": str(result.inserted_id)}),
         user=UserResponse(**user_response)
     )
 
 @app.post("/api/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin):
-    """Login with email and password"""
     user = db.users.find_one({"email": credentials.email.lower()})
     
     if not user or not verify_password(credentials.password, user["password"]):
@@ -772,50 +891,36 @@ async def login(credentials: UserLogin):
     if not user.get("is_active", True):
         raise HTTPException(status_code=403, detail="Account is deactivated")
     
+    db.users.update_one({"_id": user["_id"]}, {"$set": {"last_login": datetime.now(timezone.utc)}})
+    log_audit(user.get("tenant_id"), str(user["_id"]), AuditAction.LOGIN.value, "user", str(user["_id"]))
+    
     user_response = serialize_doc(user)
     del user_response["password"]
     
-    # Update streak
-    db.users.update_one(
-        {"_id": user["_id"]},
-        {"$set": {"last_login": datetime.now(timezone.utc)}}
-    )
-    
-    # Create tokens
-    access_token = create_access_token({"sub": str(user["_id"])})
-    refresh_token = create_refresh_token({"sub": str(user["_id"])})
-    
     return TokenResponse(
-        access_token=access_token,
-        refresh_token=refresh_token,
+        access_token=create_access_token({"sub": str(user["_id"])}),
+        refresh_token=create_refresh_token({"sub": str(user["_id"])}),
         user=UserResponse(**user_response)
     )
 
 @app.post("/api/auth/refresh")
 async def refresh_token(refresh_token: str = Body(..., embed=True)):
-    """Refresh access token using refresh token"""
     payload = decode_token(refresh_token)
-    
     if payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid token type")
     
-    user_id = payload.get("sub")
-    user = db.users.find_one({"_id": ObjectId(user_id)})
-    
+    user = db.users.find_one({"_id": ObjectId(payload.get("sub"))})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
     
-    new_access_token = create_access_token({"sub": user_id})
-    
-    return {"access_token": new_access_token, "token_type": "bearer"}
+    return {"access_token": create_access_token({"sub": payload.get("sub")}), "token_type": "bearer"}
 
 @app.get("/api/auth/me", response_model=UserResponse)
 async def get_me(current_user: dict = Depends(get_current_user)):
-    """Get current user profile"""
     return UserResponse(**current_user)
 
 # ===========================================
-# API ROUTES - USERS
+# API ROUTES - USERS (CRUD)
 # ===========================================
 
 @app.get("/api/users")
@@ -823,77 +928,245 @@ async def get_users(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     role: Optional[UserRole] = None,
-    current_user: dict = Depends(get_current_user)
+    search: Optional[str] = None,
+    is_active: Optional[bool] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN, UserRole.MANAGER]))
 ):
-    """Get all users (Admin/Manager only)"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
+    """Get all users with filters (Admin/Manager only)"""
     query = {"tenant_id": current_user.get("tenant_id")}
     if role:
         query["role"] = role.value
+    if search:
+        query["$or"] = [
+            {"name": {"$regex": search, "$options": "i"}},
+            {"email": {"$regex": search, "$options": "i"}}
+        ]
+    if is_active is not None:
+        query["is_active"] = is_active
     
-    users = list(db.users.find(query, {"password": 0}).skip(skip).limit(limit))
+    users = list(db.users.find(query, {"password": 0}).skip(skip).limit(limit).sort("created_at", DESCENDING))
     total = db.users.count_documents(query)
     
-    return {
-        "users": [serialize_doc(u) for u in users],
-        "total": total,
-        "skip": skip,
-        "limit": limit
-    }
+    return {"users": [serialize_doc(u) for u in users], "total": total, "skip": skip, "limit": limit}
+
+@app.get("/api/users/{user_id}")
+async def get_user(user_id: str, current_user: dict = Depends(get_current_user)):
+    """Get user by ID"""
+    if user_id != current_user["id"] and current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value]:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    user = db.users.find_one({"_id": ObjectId(user_id)}, {"password": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return serialize_doc(user)
 
 @app.put("/api/users/{user_id}")
-async def update_user(
-    user_id: str,
-    updates: dict = Body(...),
-    current_user: dict = Depends(get_current_user)
-):
+async def update_user(user_id: str, updates: dict = Body(...), current_user: dict = Depends(get_current_user)):
     """Update user profile"""
-    # Users can only update their own profile, admins can update anyone
     if user_id != current_user["id"] and current_user["role"] != UserRole.ADMIN.value:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    # Remove protected fields
-    protected_fields = ["password", "email", "role", "tenant_id", "_id"]
-    for field in protected_fields:
+    # Protect sensitive fields
+    protected = ["password", "email", "role", "tenant_id", "_id"]
+    for field in protected:
         updates.pop(field, None)
+    
+    # Only admin can change role
+    if "role" in updates and current_user["role"] == UserRole.ADMIN.value:
+        updates["role"] = updates["role"]
     
     updates["updated_at"] = datetime.now(timezone.utc)
     
     result = db.users.update_one({"_id": ObjectId(user_id)}, {"$set": updates})
-    
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
+    
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.UPDATE.value, "user", user_id)
     
     user = db.users.find_one({"_id": ObjectId(user_id)}, {"password": 0})
     return serialize_doc(user)
 
+@app.delete("/api/users/{user_id}")
+async def delete_user(user_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Soft delete user (Admin only)"""
+    result = db.users.update_one(
+        {"_id": ObjectId(user_id), "tenant_id": current_user.get("tenant_id")},
+        {"$set": {"is_active": False, "deleted_at": datetime.now(timezone.utc)}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.DELETE.value, "user", user_id)
+    return {"message": "User deactivated successfully"}
+
 # ===========================================
-# API ROUTES - CATEGORIES
+# API ROUTES - TENANTS (CRUD)
+# ===========================================
+
+@app.get("/api/tenants")
+async def get_tenants(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Get all tenants (Admin only)"""
+    tenants = list(db.tenants.find({}).skip(skip).limit(limit).sort("created_at", DESCENDING))
+    total = db.tenants.count_documents({})
+    return {"tenants": [serialize_doc(t) for t in tenants], "total": total}
+
+@app.get("/api/tenants/{tenant_id}")
+async def get_tenant(tenant_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Get tenant by ID"""
+    tenant = db.tenants.find_one({"_id": ObjectId(tenant_id)})
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return serialize_doc(tenant)
+
+@app.post("/api/tenants")
+async def create_tenant(tenant_data: TenantCreate, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Create new tenant (Admin only)"""
+    tenant = {
+        **tenant_data.model_dump(),
+        "is_active": True,
+        "created_at": datetime.now(timezone.utc)
+    }
+    result = db.tenants.insert_one(tenant)
+    tenant["_id"] = result.inserted_id
+    
+    # Create default subscription
+    db.subscriptions.insert_one({
+        "tenant_id": str(result.inserted_id),
+        "plan": SubscriptionPlan.FREE.value,
+        "status": SubscriptionStatus.TRIAL.value,
+        "features": {"max_users": 10, "max_exams": 5, "ai_credits": 100},
+        "current_period_start": datetime.now(timezone.utc),
+        "current_period_end": datetime.now(timezone.utc) + timedelta(days=14),
+        "created_at": datetime.now(timezone.utc)
+    })
+    
+    log_audit(str(result.inserted_id), current_user["id"], AuditAction.CREATE.value, "tenant", str(result.inserted_id))
+    return serialize_doc(tenant)
+
+@app.put("/api/tenants/{tenant_id}")
+async def update_tenant(tenant_id: str, updates: TenantUpdate, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Update tenant (Admin only)"""
+    update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
+    update_data["updated_at"] = datetime.now(timezone.utc)
+    
+    result = db.tenants.update_one({"_id": ObjectId(tenant_id)}, {"$set": update_data})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    
+    log_audit(tenant_id, current_user["id"], AuditAction.UPDATE.value, "tenant", tenant_id)
+    tenant = db.tenants.find_one({"_id": ObjectId(tenant_id)})
+    return serialize_doc(tenant)
+
+@app.delete("/api/tenants/{tenant_id}")
+async def delete_tenant(tenant_id: str, current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Deactivate tenant (Admin only)"""
+    result = db.tenants.update_one(
+        {"_id": ObjectId(tenant_id)},
+        {"$set": {"is_active": False, "deleted_at": datetime.now(timezone.utc)}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    
+    log_audit(tenant_id, current_user["id"], AuditAction.DELETE.value, "tenant", tenant_id)
+    return {"message": "Tenant deactivated successfully"}
+
+# ===========================================
+# API ROUTES - SUBSCRIPTIONS
+# ===========================================
+
+@app.get("/api/subscriptions")
+async def get_subscriptions(current_user: dict = Depends(require_roles([UserRole.ADMIN]))):
+    """Get all subscriptions (Admin only)"""
+    subscriptions = list(db.subscriptions.find({}))
+    return [serialize_doc(s) for s in subscriptions]
+
+@app.get("/api/subscriptions/current")
+async def get_current_subscription(current_user: dict = Depends(get_current_user)):
+    """Get current tenant's subscription"""
+    subscription = db.subscriptions.find_one({"tenant_id": current_user.get("tenant_id")})
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return serialize_doc(subscription)
+
+@app.put("/api/subscriptions/{subscription_id}")
+async def update_subscription(
+    subscription_id: str,
+    updates: dict = Body(...),
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Update subscription (Admin only)"""
+    updates["updated_at"] = datetime.now(timezone.utc)
+    
+    result = db.subscriptions.update_one({"_id": ObjectId(subscription_id)}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    
+    subscription = db.subscriptions.find_one({"_id": ObjectId(subscription_id)})
+    return serialize_doc(subscription)
+
+# ===========================================
+# API ROUTES - CATEGORIES (CRUD)
 # ===========================================
 
 @app.get("/api/categories")
 async def get_categories(
     include_inactive: bool = False,
+    parent_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """Get all categories"""
+    """Get all categories with optional hierarchy filter"""
     query = {"tenant_id": current_user.get("tenant_id")}
     if not include_inactive:
         query["is_active"] = True
+    if parent_id is not None:
+        query["parent_id"] = parent_id if parent_id != "null" else None
     
-    categories = list(db.categories.find(query))
+    categories = list(db.categories.find(query).sort("order", ASCENDING))
     return [serialize_doc(c) for c in categories]
 
-@app.post("/api/categories", response_model=CategoryResponse)
+@app.get("/api/categories/tree")
+async def get_categories_tree(current_user: dict = Depends(get_current_user)):
+    """Get categories as a hierarchical tree"""
+    query = {"tenant_id": current_user.get("tenant_id"), "is_active": True}
+    categories = list(db.categories.find(query).sort("order", ASCENDING))
+    
+    # Build tree structure
+    cat_map = {str(c["_id"]): {**serialize_doc(c), "children": []} for c in categories}
+    tree = []
+    
+    for cat in categories:
+        cat_id = str(cat["_id"])
+        parent_id = cat.get("parent_id")
+        
+        if parent_id and parent_id in cat_map:
+            cat_map[parent_id]["children"].append(cat_map[cat_id])
+        elif not parent_id:
+            tree.append(cat_map[cat_id])
+    
+    return tree
+
+@app.get("/api/categories/{category_id}")
+async def get_category(category_id: str, current_user: dict = Depends(get_current_user)):
+    """Get category by ID"""
+    category = db.categories.find_one({"_id": ObjectId(category_id)})
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    return serialize_doc(category)
+
+@app.post("/api/categories")
 async def create_category(
     category_data: CategoryCreate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
 ):
-    """Create a new category (Manager/Admin only)"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
+    """Create new category"""
+    # Check for duplicate slug
+    if db.categories.find_one({"slug": category_data.slug, "tenant_id": current_user.get("tenant_id")}):
+        raise HTTPException(status_code=400, detail="Category with this slug already exists")
     
     category = {
         **category_data.model_dump(),
@@ -901,37 +1174,56 @@ async def create_category(
         "is_active": True,
         "created_at": datetime.now(timezone.utc)
     }
-    
     result = db.categories.insert_one(category)
     category["_id"] = result.inserted_id
     
-    return CategoryResponse(**serialize_doc(category))
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.CREATE.value, "category", str(result.inserted_id))
+    return serialize_doc(category)
 
 @app.put("/api/categories/{category_id}")
 async def update_category(
     category_id: str,
-    updates: dict = Body(...),
-    current_user: dict = Depends(get_current_user)
+    updates: CategoryUpdate,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
 ):
-    """Update a category"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    updates["updated_at"] = datetime.now(timezone.utc)
+    """Update category"""
+    update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
+    update_data["updated_at"] = datetime.now(timezone.utc)
     
     result = db.categories.update_one(
         {"_id": ObjectId(category_id), "tenant_id": current_user.get("tenant_id")},
-        {"$set": updates}
+        {"$set": update_data}
     )
-    
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Category not found")
     
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.UPDATE.value, "category", category_id)
     category = db.categories.find_one({"_id": ObjectId(category_id)})
     return serialize_doc(category)
 
+@app.delete("/api/categories/{category_id}")
+async def delete_category(
+    category_id: str,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Soft delete category (disables it)"""
+    # Check for children
+    children = db.categories.count_documents({"parent_id": category_id, "is_active": True})
+    if children > 0:
+        raise HTTPException(status_code=400, detail="Cannot delete category with active children")
+    
+    result = db.categories.update_one(
+        {"_id": ObjectId(category_id), "tenant_id": current_user.get("tenant_id")},
+        {"$set": {"is_active": False, "deleted_at": datetime.now(timezone.utc)}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Category not found")
+    
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.DELETE.value, "category", category_id)
+    return {"message": "Category disabled successfully"}
+
 # ===========================================
-# API ROUTES - COURSES
+# API ROUTES - COURSES (CRUD)
 # ===========================================
 
 @app.get("/api/courses")
@@ -940,11 +1232,18 @@ async def get_courses(
     limit: int = Query(20, ge=1, le=100),
     category_id: Optional[str] = None,
     is_featured: Optional[bool] = None,
+    is_published: Optional[bool] = True,
     search: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """Get all courses"""
-    query = {"tenant_id": current_user.get("tenant_id"), "is_published": True}
+    """Get courses with filters"""
+    query = {"tenant_id": current_user.get("tenant_id")}
+    
+    # Students only see published courses
+    if current_user["role"] == UserRole.STUDENT.value:
+        query["is_published"] = True
+    elif is_published is not None:
+        query["is_published"] = is_published
     
     if category_id:
         query["category_id"] = category_id
@@ -953,46 +1252,44 @@ async def get_courses(
     if search:
         query["$or"] = [
             {"title": {"$regex": search, "$options": "i"}},
-            {"description": {"$regex": search, "$options": "i"}}
+            {"description": {"$regex": search, "$options": "i"}},
+            {"tags": {"$in": [search.lower()]}}
         ]
     
     courses = list(db.courses.find(query).skip(skip).limit(limit).sort("created_at", DESCENDING))
     total = db.courses.count_documents(query)
     
-    # Enrich with instructor names
+    # Enrich with instructor names and category
     for course in courses:
         instructor = db.users.find_one({"_id": ObjectId(course.get("instructor_id"))}, {"name": 1})
         course["instructor_name"] = instructor.get("name") if instructor else "Unknown"
+        category = db.categories.find_one({"_id": ObjectId(course.get("category_id"))}, {"name": 1})
+        course["category_name"] = category.get("name") if category else "Unknown"
     
-    return {
-        "courses": [serialize_doc(c) for c in courses],
-        "total": total,
-        "skip": skip,
-        "limit": limit
-    }
+    return {"courses": [serialize_doc(c) for c in courses], "total": total, "skip": skip, "limit": limit}
 
 @app.get("/api/courses/{course_id}")
 async def get_course(course_id: str, current_user: dict = Depends(get_current_user)):
-    """Get a single course by ID"""
+    """Get course by ID"""
     course = db.courses.find_one({"_id": ObjectId(course_id)})
-    
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     
-    instructor = db.users.find_one({"_id": ObjectId(course.get("instructor_id"))}, {"name": 1})
+    instructor = db.users.find_one({"_id": ObjectId(course.get("instructor_id"))}, {"name": 1, "avatar": 1})
     course["instructor_name"] = instructor.get("name") if instructor else "Unknown"
+    course["instructor_avatar"] = instructor.get("avatar") if instructor else None
+    
+    category = db.categories.find_one({"_id": ObjectId(course.get("category_id"))}, {"name": 1})
+    course["category_name"] = category.get("name") if category else "Unknown"
     
     return serialize_doc(course)
 
-@app.post("/api/courses", response_model=CourseResponse)
+@app.post("/api/courses")
 async def create_course(
     course_data: CourseCreate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
 ):
-    """Create a new course (Teacher/Manager/Admin only)"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.TEACHER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
+    """Create new course"""
     course = {
         **course_data.model_dump(),
         "tenant_id": current_user.get("tenant_id"),
@@ -1002,22 +1299,21 @@ async def create_course(
         "is_published": False,
         "created_at": datetime.now(timezone.utc)
     }
-    
     result = db.courses.insert_one(course)
     course["_id"] = result.inserted_id
     course["instructor_name"] = current_user["name"]
     
-    return CourseResponse(**serialize_doc(course))
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.CREATE.value, "course", str(result.inserted_id))
+    return serialize_doc(course)
 
 @app.put("/api/courses/{course_id}")
 async def update_course(
     course_id: str,
-    updates: dict = Body(...),
-    current_user: dict = Depends(get_current_user)
+    updates: CourseUpdate,
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
 ):
-    """Update a course"""
+    """Update course"""
     course = db.courses.find_one({"_id": ObjectId(course_id)})
-    
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     
@@ -1025,15 +1321,50 @@ async def update_course(
     if course["instructor_id"] != current_user["id"] and current_user["role"] != UserRole.ADMIN.value:
         raise HTTPException(status_code=403, detail="Access denied")
     
-    updates["updated_at"] = datetime.now(timezone.utc)
+    update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
+    update_data["updated_at"] = datetime.now(timezone.utc)
     
-    db.courses.update_one({"_id": ObjectId(course_id)}, {"$set": updates})
+    db.courses.update_one({"_id": ObjectId(course_id)}, {"$set": update_data})
     
-    updated_course = db.courses.find_one({"_id": ObjectId(course_id)})
-    return serialize_doc(updated_course)
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.UPDATE.value, "course", course_id)
+    
+    updated = db.courses.find_one({"_id": ObjectId(course_id)})
+    return serialize_doc(updated)
+
+@app.post("/api/courses/{course_id}/publish")
+async def publish_course(
+    course_id: str,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Publish course"""
+    result = db.courses.update_one(
+        {"_id": ObjectId(course_id), "tenant_id": current_user.get("tenant_id")},
+        {"$set": {"is_published": True, "published_at": datetime.now(timezone.utc)}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.PUBLISH.value, "course", course_id)
+    return {"message": "Course published successfully"}
+
+@app.delete("/api/courses/{course_id}")
+async def delete_course(
+    course_id: str,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Soft delete course"""
+    result = db.courses.update_one(
+        {"_id": ObjectId(course_id), "tenant_id": current_user.get("tenant_id")},
+        {"$set": {"is_published": False, "deleted_at": datetime.now(timezone.utc)}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Course not found")
+    
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.DELETE.value, "course", course_id)
+    return {"message": "Course deleted successfully"}
 
 # ===========================================
-# API ROUTES - QUESTIONS
+# API ROUTES - QUESTIONS (CRUD)
 # ===========================================
 
 @app.get("/api/questions")
@@ -1044,12 +1375,10 @@ async def get_questions(
     difficulty: Optional[DifficultyLevel] = None,
     question_type: Optional[QuestionType] = None,
     search: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
+    is_ai_generated: Optional[bool] = None,
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
 ):
-    """Get questions (Teacher/Manager/Admin only)"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.TEACHER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
+    """Get questions with filters"""
     query = {"tenant_id": current_user.get("tenant_id"), "is_active": True}
     
     if category_id:
@@ -1060,93 +1389,137 @@ async def get_questions(
         query["type"] = question_type.value
     if search:
         query["text"] = {"$regex": search, "$options": "i"}
+    if is_ai_generated is not None:
+        query["is_ai_generated"] = is_ai_generated
     
     questions = list(db.questions.find(query).skip(skip).limit(limit).sort("created_at", DESCENDING))
     total = db.questions.count_documents(query)
     
+    # Enrich with category names
+    for q in questions:
+        category = db.categories.find_one({"_id": ObjectId(q.get("category_id"))}, {"name": 1})
+        q["category_name"] = category.get("name") if category else "Unknown"
+    
+    return {"questions": [serialize_doc(q) for q in questions], "total": total, "skip": skip, "limit": limit}
+
+@app.get("/api/questions/stats")
+async def get_questions_stats(
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Get question bank statistics"""
+    tenant_id = current_user.get("tenant_id")
+    
+    total = db.questions.count_documents({"tenant_id": tenant_id, "is_active": True})
+    by_difficulty = db.questions.aggregate([
+        {"$match": {"tenant_id": tenant_id, "is_active": True}},
+        {"$group": {"_id": "$difficulty", "count": {"$sum": 1}}}
+    ])
+    by_type = db.questions.aggregate([
+        {"$match": {"tenant_id": tenant_id, "is_active": True}},
+        {"$group": {"_id": "$type", "count": {"$sum": 1}}}
+    ])
+    ai_generated = db.questions.count_documents({"tenant_id": tenant_id, "is_active": True, "is_ai_generated": True})
+    
     return {
-        "questions": [serialize_doc(q) for q in questions],
         "total": total,
-        "skip": skip,
-        "limit": limit
+        "by_difficulty": {item["_id"]: item["count"] for item in by_difficulty},
+        "by_type": {item["_id"]: item["count"] for item in by_type},
+        "ai_generated": ai_generated,
+        "manual": total - ai_generated
     }
 
 @app.get("/api/questions/{question_id}")
-async def get_question(question_id: str, current_user: dict = Depends(get_current_user)):
-    """Get a single question"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.TEACHER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
+async def get_question(
+    question_id: str,
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Get question by ID"""
     question = db.questions.find_one({"_id": ObjectId(question_id)})
-    
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
-    
     return serialize_doc(question)
 
-@app.post("/api/questions", response_model=QuestionResponse)
+@app.post("/api/questions")
 async def create_question(
     question_data: QuestionCreate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
 ):
-    """Create a new question (Teacher/Manager/Admin only)"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.TEACHER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
+    """Create new question"""
     question = {
         **question_data.model_dump(),
         "tenant_id": current_user.get("tenant_id"),
         "created_by": current_user["id"],
         "is_active": True,
+        "is_ai_generated": False,
         "created_at": datetime.now(timezone.utc)
     }
-    
     result = db.questions.insert_one(question)
     question["_id"] = result.inserted_id
     
-    return QuestionResponse(**serialize_doc(question))
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.CREATE.value, "question", str(result.inserted_id))
+    return serialize_doc(question)
+
+@app.post("/api/questions/bulk")
+async def create_questions_bulk(
+    questions: List[QuestionCreate],
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Create multiple questions at once"""
+    docs = []
+    for q in questions:
+        docs.append({
+            **q.model_dump(),
+            "tenant_id": current_user.get("tenant_id"),
+            "created_by": current_user["id"],
+            "is_active": True,
+            "is_ai_generated": False,
+            "created_at": datetime.now(timezone.utc)
+        })
+    
+    result = db.questions.insert_many(docs)
+    
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.CREATE.value, "questions", None, {"count": len(docs)})
+    return {"message": f"Created {len(result.inserted_ids)} questions", "count": len(result.inserted_ids)}
 
 @app.put("/api/questions/{question_id}")
 async def update_question(
     question_id: str,
-    updates: dict = Body(...),
-    current_user: dict = Depends(get_current_user)
+    updates: QuestionUpdate,
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
 ):
-    """Update a question"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.TEACHER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    updates["updated_at"] = datetime.now(timezone.utc)
+    """Update question"""
+    update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
+    update_data["updated_at"] = datetime.now(timezone.utc)
     
     result = db.questions.update_one(
         {"_id": ObjectId(question_id), "tenant_id": current_user.get("tenant_id")},
-        {"$set": updates}
+        {"$set": update_data}
     )
-    
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Question not found")
     
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.UPDATE.value, "question", question_id)
     question = db.questions.find_one({"_id": ObjectId(question_id)})
     return serialize_doc(question)
 
 @app.delete("/api/questions/{question_id}")
-async def delete_question(question_id: str, current_user: dict = Depends(get_current_user)):
-    """Soft delete a question"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
+async def delete_question(
+    question_id: str,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Soft delete question"""
     result = db.questions.update_one(
         {"_id": ObjectId(question_id), "tenant_id": current_user.get("tenant_id")},
         {"$set": {"is_active": False, "deleted_at": datetime.now(timezone.utc)}}
     )
-    
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Question not found")
     
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.DELETE.value, "question", question_id)
     return {"message": "Question deleted successfully"}
 
 # ===========================================
-# API ROUTES - EXAMS
+# API ROUTES - EXAMS (CRUD)
 # ===========================================
 
 @app.get("/api/exams")
@@ -1157,10 +1530,10 @@ async def get_exams(
     status: Optional[ExamStatus] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """Get all exams"""
+    """Get exams with filters"""
     query = {"tenant_id": current_user.get("tenant_id")}
     
-    # Students can only see published exams
+    # Students only see published/active exams
     if current_user["role"] == UserRole.STUDENT.value:
         query["status"] = {"$in": [ExamStatus.PUBLISHED.value, ExamStatus.ACTIVE.value]}
     elif status:
@@ -1172,90 +1545,107 @@ async def get_exams(
     exams = list(db.exams.find(query).skip(skip).limit(limit).sort("created_at", DESCENDING))
     total = db.exams.count_documents(query)
     
-    # Add question count
     for exam in exams:
         exam["question_count"] = len(exam.get("question_ids", []))
+        category = db.categories.find_one({"_id": ObjectId(exam.get("category_id"))}, {"name": 1})
+        exam["category_name"] = category.get("name") if category else "Unknown"
     
-    return {
-        "exams": [serialize_doc(e) for e in exams],
-        "total": total,
-        "skip": skip,
-        "limit": limit
-    }
+    return {"exams": [serialize_doc(e) for e in exams], "total": total, "skip": skip, "limit": limit}
 
 @app.get("/api/exams/{exam_id}")
 async def get_exam(exam_id: str, current_user: dict = Depends(get_current_user)):
-    """Get exam details"""
+    """Get exam by ID"""
     exam = db.exams.find_one({"_id": ObjectId(exam_id)})
-    
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     
     exam["question_count"] = len(exam.get("question_ids", []))
-    
-    # Get category name
-    category = db.categories.find_one({"_id": ObjectId(exam.get("category_id"))})
+    category = db.categories.find_one({"_id": ObjectId(exam.get("category_id"))}, {"name": 1})
     exam["category_name"] = category.get("name") if category else "Unknown"
     
     return serialize_doc(exam)
 
-@app.post("/api/exams", response_model=ExamResponse)
+@app.post("/api/exams")
 async def create_exam(
     exam_data: ExamCreate,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
 ):
-    """Create a new exam (Teacher/Manager/Admin only)"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.TEACHER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
+    """Create new exam"""
+    # Calculate total marks from questions
+    total_marks = 0
+    if exam_data.question_ids:
+        questions = list(db.questions.find({"_id": {"$in": [ObjectId(qid) for qid in exam_data.question_ids]}}))
+        total_marks = sum(q.get("marks", 1) for q in questions)
     
     exam = {
         **exam_data.model_dump(),
+        "total_marks": total_marks or exam_data.total_marks,
         "tenant_id": current_user.get("tenant_id"),
         "created_by": current_user["id"],
         "status": ExamStatus.DRAFT.value,
         "version": 1,
         "created_at": datetime.now(timezone.utc)
     }
-    
     result = db.exams.insert_one(exam)
     exam["_id"] = result.inserted_id
     exam["question_count"] = len(exam.get("question_ids", []))
     
-    return ExamResponse(**serialize_doc(exam))
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.CREATE.value, "exam", str(result.inserted_id))
+    return serialize_doc(exam)
 
 @app.put("/api/exams/{exam_id}")
 async def update_exam(
     exam_id: str,
-    updates: dict = Body(...),
-    current_user: dict = Depends(get_current_user)
+    updates: ExamUpdate,
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
 ):
-    """Update an exam"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.TEACHER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    updates["updated_at"] = datetime.now(timezone.utc)
-    
-    result = db.exams.update_one(
-        {"_id": ObjectId(exam_id), "tenant_id": current_user.get("tenant_id")},
-        {"$set": updates}
-    )
-    
-    if result.matched_count == 0:
+    """Update exam (creates new version if published)"""
+    exam = db.exams.find_one({"_id": ObjectId(exam_id)})
+    if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     
-    exam = db.exams.find_one({"_id": ObjectId(exam_id)})
-    exam["question_count"] = len(exam.get("question_ids", []))
+    update_data = {k: v for k, v in updates.model_dump().items() if v is not None}
     
-    return serialize_doc(exam)
+    # If exam is published and questions change, create new version
+    if exam["status"] != ExamStatus.DRAFT.value and "question_ids" in update_data:
+        # Create new version
+        new_exam = {**exam}
+        new_exam.pop("_id")
+        new_exam.update(update_data)
+        new_exam["version"] = exam["version"] + 1
+        new_exam["status"] = ExamStatus.DRAFT.value
+        new_exam["created_at"] = datetime.now(timezone.utc)
+        
+        result = db.exams.insert_one(new_exam)
+        new_exam["_id"] = result.inserted_id
+        new_exam["question_count"] = len(new_exam.get("question_ids", []))
+        
+        log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.CREATE.value, "exam", str(result.inserted_id), {"new_version": new_exam["version"]})
+        return serialize_doc(new_exam)
+    
+    # Regular update
+    update_data["updated_at"] = datetime.now(timezone.utc)
+    
+    # Recalculate total marks if questions changed
+    if "question_ids" in update_data:
+        questions = list(db.questions.find({"_id": {"$in": [ObjectId(qid) for qid in update_data["question_ids"]]}}))
+        update_data["total_marks"] = sum(q.get("marks", 1) for q in questions)
+    
+    db.exams.update_one({"_id": ObjectId(exam_id)}, {"$set": update_data})
+    
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.UPDATE.value, "exam", exam_id)
+    
+    updated = db.exams.find_one({"_id": ObjectId(exam_id)})
+    updated["question_count"] = len(updated.get("question_ids", []))
+    return serialize_doc(updated)
 
 @app.post("/api/exams/{exam_id}/publish")
-async def publish_exam(exam_id: str, current_user: dict = Depends(get_current_user)):
-    """Publish an exam"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
+async def publish_exam(
+    exam_id: str,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Publish exam - makes it available to students"""
     exam = db.exams.find_one({"_id": ObjectId(exam_id)})
-    
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     
@@ -1267,17 +1657,48 @@ async def publish_exam(exam_id: str, current_user: dict = Depends(get_current_us
         {"$set": {"status": ExamStatus.PUBLISHED.value, "published_at": datetime.now(timezone.utc)}}
     )
     
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.PUBLISH.value, "exam", exam_id)
     return {"message": "Exam published successfully"}
+
+@app.post("/api/exams/{exam_id}/archive")
+async def archive_exam(
+    exam_id: str,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Archive exam"""
+    result = db.exams.update_one(
+        {"_id": ObjectId(exam_id), "tenant_id": current_user.get("tenant_id")},
+        {"$set": {"status": ExamStatus.ARCHIVED.value, "archived_at": datetime.now(timezone.utc)}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    return {"message": "Exam archived successfully"}
+
+@app.delete("/api/exams/{exam_id}")
+async def delete_exam(
+    exam_id: str,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Delete exam (Admin only, soft delete)"""
+    result = db.exams.update_one(
+        {"_id": ObjectId(exam_id), "tenant_id": current_user.get("tenant_id")},
+        {"$set": {"status": ExamStatus.ARCHIVED.value, "deleted_at": datetime.now(timezone.utc)}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.DELETE.value, "exam", exam_id)
+    return {"message": "Exam deleted successfully"}
 
 # ===========================================
 # API ROUTES - EXAM ATTEMPTS
 # ===========================================
 
 @app.post("/api/exams/{exam_id}/start")
-async def start_exam_attempt(exam_id: str, current_user: dict = Depends(get_current_user)):
-    """Start a new exam attempt"""
+async def start_exam(exam_id: str, current_user: dict = Depends(get_current_user)):
+    """Start exam attempt"""
     exam = db.exams.find_one({"_id": ObjectId(exam_id)})
-    
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
     
@@ -1285,49 +1706,54 @@ async def start_exam_attempt(exam_id: str, current_user: dict = Depends(get_curr
         raise HTTPException(status_code=400, detail="Exam is not available")
     
     # Check for existing in-progress attempt
-    existing_attempt = db.exam_attempts.find_one({
+    existing = db.exam_attempts.find_one({
         "exam_id": exam_id,
         "user_id": current_user["id"],
         "status": AttemptStatus.IN_PROGRESS.value
     })
     
-    if existing_attempt:
-        # Return existing attempt
+    if existing:
+        # Resume existing attempt
         questions = list(db.questions.find(
             {"_id": {"$in": [ObjectId(qid) for qid in exam["question_ids"]]}},
-            {"correct_answer": 0, "explanation": 0}  # Hide answers
+            {"correct_answer": 0, "explanation": 0}
         ))
         
+        time_elapsed = (datetime.now(timezone.utc) - existing["started_at"]).seconds
+        time_remaining = max(0, exam["duration_minutes"] * 60 - time_elapsed)
+        
         return {
-            "attempt_id": str(existing_attempt["_id"]),
+            "attempt_id": str(existing["_id"]),
             "exam": serialize_doc(exam),
             "questions": [serialize_doc(q) for q in questions],
-            "started_at": existing_attempt["started_at"].isoformat(),
-            "time_remaining_seconds": max(0, exam["duration_minutes"] * 60 - 
-                (datetime.now(timezone.utc) - existing_attempt["started_at"]).seconds)
+            "started_at": existing["started_at"].isoformat(),
+            "time_remaining_seconds": time_remaining,
+            "saved_answers": existing.get("answers", [])
         }
     
     # Create new attempt
     attempt = {
         "exam_id": exam_id,
+        "exam_version": exam.get("version", 1),
         "user_id": current_user["id"],
         "tenant_id": current_user.get("tenant_id"),
         "status": AttemptStatus.IN_PROGRESS.value,
         "answers": [],
         "started_at": datetime.now(timezone.utc)
     }
-    
     result = db.exam_attempts.insert_one(attempt)
     
-    # Get questions (hide correct answers)
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.EXAM_START.value, "exam_attempt", str(result.inserted_id))
+    log_telemetry(current_user.get("tenant_id"), current_user["id"], "EXAM_STARTED", {"exam_id": exam_id})
+    
+    # Get questions (hide answers)
     questions = list(db.questions.find(
         {"_id": {"$in": [ObjectId(qid) for qid in exam["question_ids"]]}},
         {"correct_answer": 0, "explanation": 0}
     ))
     
-    # Shuffle if required
+    # Shuffle if enabled
     if exam.get("shuffle_questions", True):
-        import random
         random.shuffle(questions)
     
     return {
@@ -1335,18 +1761,39 @@ async def start_exam_attempt(exam_id: str, current_user: dict = Depends(get_curr
         "exam": serialize_doc(exam),
         "questions": [serialize_doc(q) for q in questions],
         "started_at": attempt["started_at"].isoformat(),
-        "time_remaining_seconds": exam["duration_minutes"] * 60
+        "time_remaining_seconds": exam["duration_minutes"] * 60,
+        "saved_answers": []
     }
 
-@app.post("/api/attempts/{attempt_id}/submit", response_model=AttemptResultResponse)
-async def submit_exam_attempt(
+@app.post("/api/attempts/{attempt_id}/sync")
+async def sync_answers(
+    attempt_id: str,
+    answers: List[AnswerSubmit],
+    current_user: dict = Depends(get_current_user)
+):
+    """Sync answers during exam (periodic save)"""
+    attempt = db.exam_attempts.find_one({"_id": ObjectId(attempt_id)})
+    if not attempt or attempt["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=404, detail="Attempt not found")
+    
+    if attempt["status"] != AttemptStatus.IN_PROGRESS.value:
+        raise HTTPException(status_code=400, detail="Attempt already submitted")
+    
+    db.exam_attempts.update_one(
+        {"_id": ObjectId(attempt_id)},
+        {"$set": {"answers": [a.model_dump() for a in answers], "last_sync": datetime.now(timezone.utc)}}
+    )
+    
+    return {"message": "Answers synced", "synced_count": len(answers)}
+
+@app.post("/api/attempts/{attempt_id}/submit")
+async def submit_exam(
     attempt_id: str,
     submission: AttemptSubmit,
     current_user: dict = Depends(get_current_user)
 ):
-    """Submit exam answers and get results"""
+    """Submit exam and get results"""
     attempt = db.exam_attempts.find_one({"_id": ObjectId(attempt_id)})
-    
     if not attempt:
         raise HTTPException(status_code=404, detail="Attempt not found")
     
@@ -1356,7 +1803,6 @@ async def submit_exam_attempt(
     if attempt["status"] != AttemptStatus.IN_PROGRESS.value:
         raise HTTPException(status_code=400, detail="Attempt already submitted")
     
-    # Get exam and questions
     exam = db.exams.find_one({"_id": ObjectId(attempt["exam_id"])})
     questions = {str(q["_id"]): q for q in db.questions.find(
         {"_id": {"$in": [ObjectId(qid) for qid in exam["question_ids"]]}}
@@ -1367,26 +1813,22 @@ async def submit_exam_attempt(
     correct_count = 0
     incorrect_count = 0
     detailed_results = []
-    
     answered_ids = set()
     
     for answer in submission.answers:
         answered_ids.add(answer.question_id)
         question = questions.get(answer.question_id)
-        
         if not question:
             continue
         
         is_correct = False
         
-        # Check answer based on question type
+        # Evaluate based on question type
         if question["type"] == QuestionType.MCQ_MULTI.value:
-            # Multiple correct answers
             correct_set = set(question["correct_answer"]) if isinstance(question["correct_answer"], list) else {question["correct_answer"]}
             answer_set = set(answer.answer) if isinstance(answer.answer, list) else {answer.answer}
             is_correct = correct_set == answer_set
         else:
-            # Single answer comparison
             is_correct = str(answer.answer).lower().strip() == str(question["correct_answer"]).lower().strip()
         
         if is_correct:
@@ -1405,16 +1847,12 @@ async def submit_exam_attempt(
             "is_correct": is_correct,
             "marks_obtained": question["marks"] if is_correct else (-question.get("negative_marks", 0) if exam.get("negative_marking") else 0),
             "explanation": question.get("explanation"),
-            "time_spent_seconds": answer.time_spent_seconds
+            "time_spent_seconds": answer.time_spent_seconds,
+            "flagged": answer.flagged
         })
     
-    # Calculate unanswered
     unanswered_count = len(exam["question_ids"]) - len(answered_ids)
-    
-    # Calculate time taken
     time_taken = int((datetime.now(timezone.utc) - attempt["started_at"]).total_seconds())
-    
-    # Calculate percentage and pass status
     percentage = (score / exam["total_marks"]) * 100 if exam["total_marks"] > 0 else 0
     passed = score >= exam["passing_marks"]
     
@@ -1436,64 +1874,65 @@ async def submit_exam_attempt(
         }}
     )
     
-    # Award XP to user
-    xp_earned = score * 10 + (50 if passed else 0)
-    db.users.update_one(
-        {"_id": ObjectId(current_user["id"])},
-        {"$inc": {"xp_points": xp_earned}}
-    )
+    # Award XP
+    xp_earned = int(score * 10) + (50 if passed else 0)
+    db.users.update_one({"_id": ObjectId(current_user["id"])}, {"$inc": {"xp_points": xp_earned}})
     
-    return AttemptResultResponse(
-        id=attempt_id,
-        exam_id=attempt["exam_id"],
-        exam_title=exam["title"],
-        user_id=current_user["id"],
-        score=max(0, score),
-        total_marks=exam["total_marks"],
-        percentage=round(percentage, 2),
-        passed=passed,
-        correct_count=correct_count,
-        incorrect_count=incorrect_count,
-        unanswered_count=unanswered_count,
-        time_taken_seconds=time_taken,
-        started_at=attempt["started_at"],
-        submitted_at=datetime.now(timezone.utc),
-        detailed_results=detailed_results if exam.get("show_result_immediately", True) else None
-    )
+    log_audit(current_user.get("tenant_id"), current_user["id"], AuditAction.EXAM_SUBMIT.value, "exam_attempt", attempt_id)
+    log_telemetry(current_user.get("tenant_id"), current_user["id"], "EXAM_SUBMITTED", {
+        "exam_id": attempt["exam_id"],
+        "score": score,
+        "passed": passed
+    })
+    
+    return {
+        "id": attempt_id,
+        "exam_id": attempt["exam_id"],
+        "exam_title": exam["title"],
+        "user_id": current_user["id"],
+        "score": max(0, score),
+        "total_marks": exam["total_marks"],
+        "percentage": round(percentage, 2),
+        "passed": passed,
+        "correct_count": correct_count,
+        "incorrect_count": incorrect_count,
+        "unanswered_count": unanswered_count,
+        "time_taken_seconds": time_taken,
+        "xp_earned": xp_earned,
+        "started_at": attempt["started_at"].isoformat(),
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "detailed_results": detailed_results if exam.get("show_result_immediately", True) else None
+    }
 
 @app.get("/api/attempts")
-async def get_user_attempts(
+async def get_attempts(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
+    exam_id: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """Get current user's exam attempts"""
+    """Get user's exam attempts"""
     query = {"user_id": current_user["id"]}
+    if exam_id:
+        query["exam_id"] = exam_id
     
     attempts = list(db.exam_attempts.find(query).skip(skip).limit(limit).sort("started_at", DESCENDING))
     total = db.exam_attempts.count_documents(query)
     
-    # Enrich with exam titles
     for attempt in attempts:
         exam = db.exams.find_one({"_id": ObjectId(attempt["exam_id"])}, {"title": 1})
         attempt["exam_title"] = exam.get("title") if exam else "Unknown"
     
-    return {
-        "attempts": [serialize_doc(a) for a in attempts],
-        "total": total,
-        "skip": skip,
-        "limit": limit
-    }
+    return {"attempts": [serialize_doc(a) for a in attempts], "total": total}
 
 @app.get("/api/attempts/{attempt_id}")
-async def get_attempt_detail(attempt_id: str, current_user: dict = Depends(get_current_user)):
-    """Get detailed attempt result"""
+async def get_attempt(attempt_id: str, current_user: dict = Depends(get_current_user)):
+    """Get attempt details"""
     attempt = db.exam_attempts.find_one({"_id": ObjectId(attempt_id)})
-    
     if not attempt:
         raise HTTPException(status_code=404, detail="Attempt not found")
     
-    # Allow user to see their own attempts, or admin/manager to see all
+    # Students can only see their own, managers/admins can see all
     if attempt["user_id"] != current_user["id"] and current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value]:
         raise HTTPException(status_code=403, detail="Access denied")
     
@@ -1503,171 +1942,65 @@ async def get_attempt_detail(attempt_id: str, current_user: dict = Depends(get_c
     return serialize_doc(attempt)
 
 # ===========================================
-# API ROUTES - AI SERVICES
+# API ROUTES - NOTIFICATIONS
 # ===========================================
 
-@app.post("/api/ai/generate-questions")
-async def generate_questions_ai(
-    request: AIQuestionGenerate,
+@app.get("/api/notifications")
+async def get_notifications(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=50),
+    unread_only: bool = False,
     current_user: dict = Depends(get_current_user)
 ):
-    """Generate questions using AI (Teacher/Manager/Admin only)"""
-    if current_user["role"] not in [UserRole.ADMIN.value, UserRole.MANAGER.value, UserRole.TEACHER.value]:
-        raise HTTPException(status_code=403, detail="Access denied")
+    """Get user notifications"""
+    query = {
+        "$or": [
+            {"user_id": current_user["id"]},
+            {"user_id": None, "tenant_id": current_user.get("tenant_id")}
+        ]
+    }
+    if unread_only:
+        query["is_read"] = False
     
-    if not AI_ENABLED or not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=503, detail="AI service is not configured")
+    notifications = list(db.notifications.find(query).skip(skip).limit(limit).sort("created_at", DESCENDING))
+    total = db.notifications.count_documents(query)
+    unread = db.notifications.count_documents({**query, "is_read": False})
     
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        
-        # Get category name
-        category = db.categories.find_one({"_id": ObjectId(request.category_id)})
-        category_name = category.get("name", "General") if category else "General"
-        
-        # Create AI prompt
-        prompt = f"""Generate {request.count} {request.question_type.value} questions about "{request.topic}" for {category_name} category.
-Difficulty level: {request.difficulty.value}
+    return {"notifications": [serialize_doc(n) for n in notifications], "total": total, "unread_count": unread}
 
-Return a JSON array with this exact structure for each question:
-{{
-    "text": "Question text here",
-    "options": [
-        {{"id": "a", "text": "Option A"}},
-        {{"id": "b", "text": "Option B"}},
-        {{"id": "c", "text": "Option C"}},
-        {{"id": "d", "text": "Option D"}}
-    ],
-    "correct_answer": "a",
-    "explanation": "Why this answer is correct",
-    "tags": ["tag1", "tag2"]
-}}
-
-For TRUE_FALSE type, use options: [{{"id": "true", "text": "True"}}, {{"id": "false", "text": "False"}}]
-For FILL_BLANK type, options should be null and correct_answer should be the word/phrase.
-For MCQ_MULTI type, correct_answer should be an array like ["a", "c"].
-
-Return ONLY the JSON array, no other text."""
-
-        # Initialize AI chat
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=f"question-gen-{current_user['id']}-{datetime.now().timestamp()}",
-            system_message="You are an expert educational content creator specializing in creating high-quality exam questions."
-        )
-        chat.with_model("openai", "gpt-4o")
-        
-        # Send message
-        response = await chat.send_message(UserMessage(text=prompt))
-        
-        # Parse response
-        try:
-            # Clean response and parse JSON
-            response_text = response.strip()
-            if response_text.startswith("```json"):
-                response_text = response_text[7:]
-            if response_text.startswith("```"):
-                response_text = response_text[3:]
-            if response_text.endswith("```"):
-                response_text = response_text[:-3]
-            
-            questions_data = json.loads(response_text.strip())
-            
-            # Save questions to database
-            saved_questions = []
-            for q_data in questions_data:
-                question = {
-                    "category_id": request.category_id,
-                    "type": request.question_type.value,
-                    "text": q_data["text"],
-                    "options": q_data.get("options"),
-                    "correct_answer": q_data["correct_answer"],
-                    "explanation": q_data.get("explanation", ""),
-                    "difficulty": request.difficulty.value,
-                    "marks": 1,
-                    "negative_marks": 0.25 if request.difficulty.value in ["HARD", "EXPERT"] else 0,
-                    "tags": q_data.get("tags", [request.topic]),
-                    "case_context": q_data.get("case_context"),
-                    "tenant_id": current_user.get("tenant_id"),
-                    "created_by": current_user["id"],
-                    "is_active": True,
-                    "ai_generated": True,
-                    "created_at": datetime.now(timezone.utc)
-                }
-                result = db.questions.insert_one(question)
-                question["_id"] = result.inserted_id
-                saved_questions.append(serialize_doc(question))
-            
-            return {
-                "message": f"Successfully generated {len(saved_questions)} questions",
-                "questions": saved_questions
-            }
-            
-        except json.JSONDecodeError as e:
-            raise HTTPException(status_code=500, detail=f"Failed to parse AI response: {str(e)}")
-            
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
-
-@app.post("/api/ai/suggest-course")
-async def suggest_course_ai(
-    topic: str = Body(..., embed=True),
-    current_user: dict = Depends(get_current_user)
+@app.post("/api/notifications")
+async def create_notification(
+    notification_data: NotificationCreate,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
 ):
-    """Get AI-powered course suggestions"""
-    if not AI_ENABLED or not EMERGENT_LLM_KEY:
-        raise HTTPException(status_code=503, detail="AI service is not configured")
-    
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        
-        prompt = f"""Based on the topic "{topic}", suggest a comprehensive course outline with:
-1. Course title
-2. Course description (2-3 sentences)
-3. Learning objectives (5 points)
-4. Module breakdown (5-8 modules with topics)
-5. Recommended duration in hours
-6. Target audience
-7. Prerequisites
+    """Create notification (Manager/Admin)"""
+    notification = {
+        **notification_data.model_dump(),
+        "tenant_id": current_user.get("tenant_id"),
+        "is_read": False,
+        "created_at": datetime.now(timezone.utc)
+    }
+    result = db.notifications.insert_one(notification)
+    notification["_id"] = result.inserted_id
+    return serialize_doc(notification)
 
-Return as JSON with this structure:
-{{
-    "title": "Course Title",
-    "description": "Description here",
-    "objectives": ["obj1", "obj2", ...],
-    "modules": [
-        {{"name": "Module 1", "topics": ["topic1", "topic2"]}},
-        ...
-    ],
-    "duration_hours": 40,
-    "target_audience": "Description of target audience",
-    "prerequisites": ["prerequisite1", "prerequisite2"]
-}}"""
+@app.put("/api/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
+    """Mark notification as read"""
+    db.notifications.update_one(
+        {"_id": ObjectId(notification_id)},
+        {"$set": {"is_read": True, "read_at": datetime.now(timezone.utc)}}
+    )
+    return {"message": "Notification marked as read"}
 
-        chat = LlmChat(
-            api_key=EMERGENT_LLM_KEY,
-            session_id=f"course-suggest-{current_user['id']}-{datetime.now().timestamp()}",
-            system_message="You are an expert curriculum designer for online education."
-        )
-        chat.with_model("openai", "gpt-4o")
-        
-        response = await chat.send_message(UserMessage(text=prompt))
-        
-        # Parse response
-        response_text = response.strip()
-        if response_text.startswith("```json"):
-            response_text = response_text[7:]
-        if response_text.startswith("```"):
-            response_text = response_text[3:]
-        if response_text.endswith("```"):
-            response_text = response_text[:-3]
-        
-        course_suggestion = json.loads(response_text.strip())
-        
-        return course_suggestion
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+@app.put("/api/notifications/read-all")
+async def mark_all_read(current_user: dict = Depends(get_current_user)):
+    """Mark all notifications as read"""
+    db.notifications.update_many(
+        {"$or": [{"user_id": current_user["id"]}, {"user_id": None}], "is_read": False},
+        {"$set": {"is_read": True, "read_at": datetime.now(timezone.utc)}}
+    )
+    return {"message": "All notifications marked as read"}
 
 # ===========================================
 # API ROUTES - DASHBOARD & ANALYTICS
@@ -1675,52 +2008,59 @@ Return as JSON with this structure:
 
 @app.get("/api/dashboard/stats")
 async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
-    """Get dashboard statistics"""
+    """Get dashboard statistics based on user role"""
     tenant_id = current_user.get("tenant_id")
     
-    # Base stats
-    stats = {
-        "total_users": db.users.count_documents({"tenant_id": tenant_id}),
+    base_stats = {
+        "total_users": db.users.count_documents({"tenant_id": tenant_id, "is_active": True}),
         "total_courses": db.courses.count_documents({"tenant_id": tenant_id, "is_published": True}),
         "total_exams": db.exams.count_documents({"tenant_id": tenant_id, "status": {"$ne": ExamStatus.DRAFT.value}}),
         "total_questions": db.questions.count_documents({"tenant_id": tenant_id, "is_active": True}),
         "total_attempts": db.exam_attempts.count_documents({"tenant_id": tenant_id}),
     }
     
-    # Role-specific stats
     if current_user["role"] == UserRole.STUDENT.value:
         # Student-specific stats
-        my_attempts = list(db.exam_attempts.find({"user_id": current_user["id"], "status": AttemptStatus.EVALUATED.value}))
-        stats["my_exams_taken"] = len(my_attempts)
-        stats["my_average_score"] = sum(a.get("percentage", 0) for a in my_attempts) / len(my_attempts) if my_attempts else 0
-        stats["my_pass_rate"] = sum(1 for a in my_attempts if a.get("passed", False)) / len(my_attempts) * 100 if my_attempts else 0
-        stats["my_xp_points"] = current_user.get("xp_points", 0)
-        stats["my_level"] = current_user.get("level", 1)
-        stats["my_streak"] = current_user.get("streak", 0)
+        my_attempts = list(db.exam_attempts.find({
+            "user_id": current_user["id"],
+            "status": AttemptStatus.EVALUATED.value
+        }))
+        
+        base_stats.update({
+            "my_exams_taken": len(my_attempts),
+            "my_average_score": sum(a.get("percentage", 0) for a in my_attempts) / len(my_attempts) if my_attempts else 0,
+            "my_pass_rate": sum(1 for a in my_attempts if a.get("passed", False)) / len(my_attempts) * 100 if my_attempts else 0,
+            "my_xp_points": current_user.get("xp_points", 0),
+            "my_level": current_user.get("level", 1),
+            "my_streak": current_user.get("streak", 0),
+            "my_courses_enrolled": 0,  # TODO: Implement enrollment tracking
+        })
     else:
         # Admin/Manager stats
         today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-        stats["active_users_today"] = db.users.count_documents({"tenant_id": tenant_id, "last_login": {"$gte": today}})
+        week_ago = today - timedelta(days=7)
         
-        # Average score and pass rate
-        all_attempts = list(db.exam_attempts.find({"tenant_id": tenant_id, "status": AttemptStatus.EVALUATED.value}))
-        stats["average_score"] = sum(a.get("percentage", 0) for a in all_attempts) / len(all_attempts) if all_attempts else 0
-        stats["pass_rate"] = sum(1 for a in all_attempts if a.get("passed", False)) / len(all_attempts) * 100 if all_attempts else 0
-        
-        # Recent enrollments (last 7 days)
-        week_ago = datetime.now(timezone.utc) - timedelta(days=7)
-        stats["recent_enrollments"] = db.users.count_documents({
+        all_attempts = list(db.exam_attempts.find({
             "tenant_id": tenant_id,
-            "role": UserRole.STUDENT.value,
-            "created_at": {"$gte": week_ago}
-        })
+            "status": AttemptStatus.EVALUATED.value
+        }))
         
-        # User breakdown by role
-        stats["students_count"] = db.users.count_documents({"tenant_id": tenant_id, "role": UserRole.STUDENT.value})
-        stats["teachers_count"] = db.users.count_documents({"tenant_id": tenant_id, "role": UserRole.TEACHER.value})
-        stats["managers_count"] = db.users.count_documents({"tenant_id": tenant_id, "role": UserRole.MANAGER.value})
+        base_stats.update({
+            "active_users_today": db.users.count_documents({"tenant_id": tenant_id, "last_login": {"$gte": today}}),
+            "average_score": sum(a.get("percentage", 0) for a in all_attempts) / len(all_attempts) if all_attempts else 0,
+            "pass_rate": sum(1 for a in all_attempts if a.get("passed", False)) / len(all_attempts) * 100 if all_attempts else 0,
+            "recent_enrollments": db.users.count_documents({
+                "tenant_id": tenant_id,
+                "role": UserRole.STUDENT.value,
+                "created_at": {"$gte": week_ago}
+            }),
+            "students_count": db.users.count_documents({"tenant_id": tenant_id, "role": UserRole.STUDENT.value}),
+            "teachers_count": db.users.count_documents({"tenant_id": tenant_id, "role": UserRole.TEACHER.value}),
+            "managers_count": db.users.count_documents({"tenant_id": tenant_id, "role": UserRole.MANAGER.value}),
+            "ai_questions_count": db.questions.count_documents({"tenant_id": tenant_id, "is_ai_generated": True}),
+        })
     
-    return stats
+    return base_stats
 
 @app.get("/api/dashboard/recent-activity")
 async def get_recent_activity(
@@ -1728,18 +2068,12 @@ async def get_recent_activity(
     current_user: dict = Depends(get_current_user)
 ):
     """Get recent activity feed"""
-    activities = []
-    
-    # Recent exam attempts
     if current_user["role"] == UserRole.STUDENT.value:
-        attempts = list(db.exam_attempts.find(
-            {"user_id": current_user["id"]}
-        ).sort("started_at", DESCENDING).limit(limit))
+        attempts = list(db.exam_attempts.find({"user_id": current_user["id"]}).sort("started_at", DESCENDING).limit(limit))
     else:
-        attempts = list(db.exam_attempts.find(
-            {"tenant_id": current_user.get("tenant_id")}
-        ).sort("started_at", DESCENDING).limit(limit))
+        attempts = list(db.exam_attempts.find({"tenant_id": current_user.get("tenant_id")}).sort("started_at", DESCENDING).limit(limit))
     
+    activities = []
     for attempt in attempts:
         exam = db.exams.find_one({"_id": ObjectId(attempt["exam_id"])}, {"title": 1})
         user = db.users.find_one({"_id": ObjectId(attempt["user_id"])}, {"name": 1, "avatar": 1})
@@ -1751,11 +2085,12 @@ async def get_recent_activity(
             "exam_title": exam.get("title") if exam else "Unknown",
             "status": attempt.get("status"),
             "score": attempt.get("score"),
+            "percentage": attempt.get("percentage"),
             "passed": attempt.get("passed"),
             "timestamp": attempt["started_at"].isoformat() if attempt.get("started_at") else None
         })
     
-    return activities[:limit]
+    return activities
 
 @app.get("/api/dashboard/performance-chart")
 async def get_performance_chart(
@@ -1772,7 +2107,6 @@ async def get_performance_chart(
     
     attempts = list(db.exam_attempts.find(query).sort("started_at", ASCENDING))
     
-    # Group by date
     from collections import defaultdict
     daily_data = defaultdict(lambda: {"attempts": 0, "total_score": 0, "passed": 0})
     
@@ -1783,7 +2117,6 @@ async def get_performance_chart(
         if attempt.get("passed", False):
             daily_data[date_key]["passed"] += 1
     
-    # Convert to chart format
     chart_data = []
     for date_str, data in sorted(daily_data.items()):
         chart_data.append({
@@ -1795,65 +2128,195 @@ async def get_performance_chart(
     
     return chart_data
 
-# ===========================================
-# API ROUTES - TENANTS (Admin only)
-# ===========================================
-
-@app.get("/api/tenants")
-async def get_tenants(current_user: dict = Depends(get_current_user)):
-    """Get all tenants (Admin only)"""
-    if current_user["role"] != UserRole.ADMIN.value:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    tenants = list(db.tenants.find({}))
-    return [serialize_doc(t) for t in tenants]
-
-@app.post("/api/tenants", response_model=TenantResponse)
-async def create_tenant(
-    tenant_data: TenantCreate,
-    current_user: dict = Depends(get_current_user)
-):
-    """Create a new tenant (Admin only)"""
-    if current_user["role"] != UserRole.ADMIN.value:
-        raise HTTPException(status_code=403, detail="Access denied")
-    
-    tenant = {
-        **tenant_data.model_dump(),
-        "is_active": True,
-        "created_at": datetime.now(timezone.utc)
-    }
-    
-    result = db.tenants.insert_one(tenant)
-    tenant["_id"] = result.inserted_id
-    
-    return TenantResponse(**serialize_doc(tenant))
-
-# ===========================================
-# API ROUTES - LEADERBOARD
-# ===========================================
-
 @app.get("/api/leaderboard")
 async def get_leaderboard(
     limit: int = Query(10, ge=1, le=100),
     current_user: dict = Depends(get_current_user)
 ):
-    """Get top students by XP points"""
+    """Get top students by XP"""
     users = list(db.users.find(
-        {"tenant_id": current_user.get("tenant_id"), "role": UserRole.STUDENT.value},
+        {"tenant_id": current_user.get("tenant_id"), "role": UserRole.STUDENT.value, "is_active": True},
         {"password": 0}
     ).sort("xp_points", DESCENDING).limit(limit))
     
-    leaderboard = []
-    for i, user in enumerate(users, 1):
-        leaderboard.append({
-            "rank": i,
-            **serialize_doc(user)
-        })
-    
-    return leaderboard
+    return [{"rank": i + 1, **serialize_doc(u)} for i, u in enumerate(users)]
 
 # ===========================================
-# RUN APPLICATION
+# API ROUTES - AUDIT LOGS
+# ===========================================
+
+@app.get("/api/audit-logs")
+async def get_audit_logs(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    entity: Optional[str] = None,
+    action: Optional[str] = None,
+    user_id: Optional[str] = None,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Get audit logs"""
+    query = {"tenant_id": current_user.get("tenant_id")}
+    if entity:
+        query["entity"] = entity
+    if action:
+        query["action"] = action
+    if user_id:
+        query["user_id"] = user_id
+    
+    logs = list(db.audit_logs.find(query).skip(skip).limit(limit).sort("created_at", DESCENDING))
+    total = db.audit_logs.count_documents(query)
+    
+    # Enrich with user names
+    for log in logs:
+        user = db.users.find_one({"_id": ObjectId(log["user_id"])}, {"name": 1})
+        log["user_name"] = user.get("name") if user else "Unknown"
+    
+    return {"logs": [serialize_doc(l) for l in logs], "total": total}
+
+# ===========================================
+# API ROUTES - AI (COMMENTED OUT - SEE DOCS)
+# ===========================================
+
+@app.post("/api/ai/generate-questions")
+async def generate_questions_ai(
+    request: AIQuestionGenerate,
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """
+    AI Question Generation - CURRENTLY DISABLED
+    
+    To enable AI features:
+    1. Set AI_ENABLED=true in .env
+    2. Configure EMERGENT_LLM_KEY with your API key
+    3. See /app/docs/AI_INTEGRATION.md for full setup guide
+    
+    For now, use manual question creation at /api/questions POST
+    """
+    if not AI_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "AI features are currently disabled",
+                "message": "To enable AI question generation, configure AI_ENABLED=true and EMERGENT_LLM_KEY in your environment. See /app/docs/AI_INTEGRATION.md for setup instructions.",
+                "alternative": "Use POST /api/questions for manual question creation"
+            }
+        )
+    
+    # AI IMPLEMENTATION - COMMENTED OUT
+    # Uncomment and configure when ready to enable AI
+    """
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        
+        category = db.categories.find_one({"_id": ObjectId(request.category_id)})
+        category_name = category.get("name", "General") if category else "General"
+        
+        prompt = f'''Generate {request.count} {request.question_type.value} questions about "{request.topic}" for {category_name}.
+Difficulty: {request.difficulty.value}
+{f"Bloom's Level: {request.blooms_level}" if request.blooms_level else ""}
+{f"Exam Type: {request.exam_type}" if request.exam_type else ""}
+
+Return JSON array with structure:
+{{
+    "text": "Question text",
+    "options": [{{"id": "a", "text": "Option A"}}, ...],
+    "correct_answer": "a",
+    "explanation": "Why this is correct",
+    "tags": ["tag1", "tag2"]
+}}
+
+For TRUE_FALSE: options = [{{"id": "true", "text": "True"}}, {{"id": "false", "text": "False"}}]
+For FILL_BLANK: options = null, correct_answer = "the word/phrase"
+For MCQ_MULTI: correct_answer = ["a", "c"]
+
+Return ONLY the JSON array.'''
+
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"question-gen-{current_user['id']}-{datetime.now().timestamp()}",
+            system_message="You are an expert educational content creator."
+        )
+        chat.with_model("openai", "gpt-4o")
+        
+        response = await chat.send_message(UserMessage(text=prompt))
+        
+        # Parse and save questions
+        response_text = response.strip()
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.startswith("```"):
+            response_text = response_text[3:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
+        
+        questions_data = json.loads(response_text.strip())
+        
+        saved_questions = []
+        for q_data in questions_data:
+            question = {
+                "category_id": request.category_id,
+                "type": request.question_type.value,
+                "text": q_data["text"],
+                "options": q_data.get("options"),
+                "correct_answer": q_data["correct_answer"],
+                "explanation": q_data.get("explanation", ""),
+                "difficulty": request.difficulty.value,
+                "marks": 1,
+                "negative_marks": 0.25 if request.difficulty.value in ["HARD", "EXPERT"] else 0,
+                "tags": q_data.get("tags", [request.topic]),
+                "blooms_level": request.blooms_level,
+                "tenant_id": current_user.get("tenant_id"),
+                "created_by": current_user["id"],
+                "is_active": True,
+                "is_ai_generated": True,
+                "ai_confidence": 0.85,  # Default confidence
+                "created_at": datetime.now(timezone.utc)
+            }
+            result = db.questions.insert_one(question)
+            question["_id"] = result.inserted_id
+            saved_questions.append(serialize_doc(question))
+        
+        # Log AI usage
+        db.ai_credit_usage.insert_one({
+            "tenant_id": current_user.get("tenant_id"),
+            "user_id": current_user["id"],
+            "action": "question_generation",
+            "tokens": len(prompt) + len(response),  # Approximate
+            "cost": 0.01 * request.count,  # Approximate cost
+            "created_at": datetime.now(timezone.utc)
+        })
+        
+        return {"message": f"Generated {len(saved_questions)} questions", "questions": saved_questions}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI generation failed: {str(e)}")
+    """
+    
+    raise HTTPException(status_code=503, detail="AI features disabled. Enable in configuration.")
+
+@app.post("/api/ai/suggest-course")
+async def suggest_course_ai(
+    request: AICourseGenerate,
+    current_user: dict = Depends(require_roles([UserRole.TEACHER, UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """
+    AI Course Suggestion - CURRENTLY DISABLED
+    
+    See /app/docs/AI_INTEGRATION.md for setup
+    """
+    if not AI_ENABLED:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "AI features are currently disabled",
+                "message": "Configure AI_ENABLED=true and EMERGENT_LLM_KEY to enable AI course suggestions."
+            }
+        )
+    
+    raise HTTPException(status_code=503, detail="AI features disabled. Enable in configuration.")
+
+# ===========================================
+# RUN
 # ===========================================
 
 if __name__ == "__main__":
