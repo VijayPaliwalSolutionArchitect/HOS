@@ -318,6 +318,84 @@ class AICourseGenerate(BaseModel):
     difficulty: DifficultyLevel
     learning_style: Optional[str] = None
 
+# --- Telemetry Event Models (Anti-Cheating) ---
+class TelemetryEventType(str, Enum):
+    TAB_SWITCH = "TAB_SWITCH"
+    WINDOW_BLUR = "WINDOW_BLUR"
+    COPY_ATTEMPT = "COPY_ATTEMPT"
+    PASTE_ATTEMPT = "PASTE_ATTEMPT"
+    RIGHT_CLICK = "RIGHT_CLICK"
+    KEYBOARD_SHORTCUT = "KEYBOARD_SHORTCUT"
+    FULLSCREEN_EXIT = "FULLSCREEN_EXIT"
+    SUSPICIOUS_ACTIVITY = "SUSPICIOUS_ACTIVITY"
+
+class TelemetryEventCreate(BaseModel):
+    exam_attempt_id: str
+    event_type: TelemetryEventType
+    event_data: Dict[str, Any] = {}
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+# --- Exam Risk Profile Models ---
+class RiskLevel(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+class ExamRiskProfileCreate(BaseModel):
+    exam_attempt_id: str
+    flagged_events: List[Dict[str, Any]] = []
+    analysis_notes: Optional[str] = None
+
+# --- AI Credit Usage Models ---
+class AIUsageType(str, Enum):
+    QUESTION_GENERATION = "QUESTION_GENERATION"
+    ESSAY_GRADING = "ESSAY_GRADING"
+    PLAGIARISM_CHECK = "PLAGIARISM_CHECK"
+    RECOMMENDATION = "RECOMMENDATION"
+    COURSE_GENERATION = "COURSE_GENERATION"
+
+class AICreditUsageCreate(BaseModel):
+    usage_type: AIUsageType
+    request_details: Dict[str, Any]
+    credits_used: int
+    response_summary: Optional[str] = None
+
+# --- Audit Log Response Model ---
+class AuditLogResponse(BaseModel):
+    id: str
+    tenant_id: str
+    user_id: str
+    user_name: Optional[str] = None
+    action: str
+    entity: str
+    entity_id: Optional[str] = None
+    meta: Dict[str, Any] = {}
+    created_at: datetime
+
+# --- Notification Update Model ---
+class NotificationUpdate(BaseModel):
+    title: Optional[str] = None
+    message: Optional[str] = None
+    link: Optional[str] = None
+    expires_at: Optional[datetime] = None
+
+# --- Billing Invoice Model ---
+class Invoice(BaseModel):
+    id: str
+    amount: float
+    currency: str = "USD"
+    status: str  # pending, paid, failed
+    invoice_date: datetime
+    due_date: datetime
+    paid_date: Optional[datetime] = None
+
+class BillingUpdate(BaseModel):
+    plan: Optional[SubscriptionPlan] = None
+    status: Optional[SubscriptionStatus] = None
+    payment_method: Optional[str] = None
+    billing_email: Optional[EmailStr] = None
+
 # ===========================================
 # DATABASE & LIFECYCLE
 # ===========================================
@@ -345,7 +423,17 @@ async def lifespan(app: FastAPI):
     db.exams.create_index([("version", ASCENDING)])
     db.exam_attempts.create_index([("user_id", ASCENDING), ("exam_id", ASCENDING)])
     db.audit_logs.create_index([("tenant_id", ASCENDING), ("created_at", DESCENDING)])
+    db.audit_logs.create_index([("user_id", ASCENDING)])
+    db.audit_logs.create_index([("entity", ASCENDING), ("action", ASCENDING)])
     db.notifications.create_index([("user_id", ASCENDING), ("is_read", ASCENDING)])
+    db.notifications.create_index([("tenant_id", ASCENDING), ("created_at", DESCENDING)])
+    db.telemetry_events.create_index([("exam_attempt_id", ASCENDING), ("event_type", ASCENDING)])
+    db.telemetry_events.create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+    db.exam_risk_profiles.create_index([("exam_attempt_id", ASCENDING)])
+    db.exam_risk_profiles.create_index([("risk_level", ASCENDING)])
+    db.ai_credit_usage.create_index([("tenant_id", ASCENDING), ("created_at", DESCENDING)])
+    db.ai_credit_usage.create_index([("user_id", ASCENDING)])
+    db.subscriptions.create_index([("tenant_id", ASCENDING)])
     
     await seed_default_data()
     print(f"✅ Connected to MongoDB: {DB_NAME}")
@@ -2172,6 +2260,235 @@ async def get_audit_logs(
         log["user_name"] = user.get("name") if user else "Unknown"
     
     return {"logs": [serialize_doc(l) for l in logs], "total": total}
+
+# ===========================================
+# API ROUTES - TELEMETRY & ANTI-CHEATING
+# ===========================================
+
+@app.post("/api/telemetry/events")
+async def create_telemetry_event(
+    event_data: TelemetryEventCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Log telemetry event during exam (Anti-Cheating)
+    
+    Records suspicious activities like:
+    - Tab switches
+    - Window blur/focus changes
+    - Copy/paste attempts
+    - Right-click attempts
+    - Keyboard shortcuts
+    - Fullscreen exit
+    """
+    # Verify attempt belongs to current user
+    attempt = db.exam_attempts.find_one({"_id": ObjectId(event_data.exam_attempt_id)})
+    if not attempt or attempt["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Calculate risk score based on event type
+    risk_scores = {
+        TelemetryEventType.TAB_SWITCH: 10,
+        TelemetryEventType.WINDOW_BLUR: 8,
+        TelemetryEventType.COPY_ATTEMPT: 15,
+        TelemetryEventType.PASTE_ATTEMPT: 15,
+        TelemetryEventType.RIGHT_CLICK: 5,
+        TelemetryEventType.KEYBOARD_SHORTCUT: 12,
+        TelemetryEventType.FULLSCREEN_EXIT: 20,
+        TelemetryEventType.SUSPICIOUS_ACTIVITY: 25
+    }
+    
+    event = {
+        **event_data.model_dump(),
+        "user_id": current_user["id"],
+        "tenant_id": current_user.get("tenant_id"),
+        "risk_score": risk_scores.get(event_data.event_type, 5),
+        "created_at": datetime.now(timezone.utc)
+    }
+    
+    result = db.telemetry_events.insert_one(event)
+    
+    # Check if risk profile needs update
+    await update_risk_profile(event_data.exam_attempt_id, current_user.get("tenant_id"))
+    
+    return {"message": "Event logged", "event_id": str(result.inserted_id)}
+
+@app.get("/api/telemetry/events/{attempt_id}")
+async def get_telemetry_events(
+    attempt_id: str,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Get telemetry events for an exam attempt"""
+    events = list(db.telemetry_events.find({"exam_attempt_id": attempt_id}).sort("created_at", ASCENDING))
+    return [serialize_doc(e) for e in events]
+
+async def update_risk_profile(attempt_id: str, tenant_id: str):
+    """Update or create risk profile for an attempt"""
+    events = list(db.telemetry_events.find({"exam_attempt_id": attempt_id}))
+    
+    if not events:
+        return
+    
+    total_risk_score = sum(e.get("risk_score", 0) for e in events)
+    
+    # Determine risk level
+    if total_risk_score >= 100:
+        risk_level = RiskLevel.CRITICAL
+    elif total_risk_score >= 50:
+        risk_level = RiskLevel.HIGH
+    elif total_risk_score >= 20:
+        risk_level = RiskLevel.MEDIUM
+    else:
+        risk_level = RiskLevel.LOW
+    
+    # Flag high-risk events
+    flagged_events = [
+        {
+            "event_type": e.get("event_type"),
+            "timestamp": e.get("created_at"),
+            "risk_score": e.get("risk_score")
+        }
+        for e in events if e.get("risk_score", 0) >= 10
+    ]
+    
+    profile = {
+        "exam_attempt_id": attempt_id,
+        "tenant_id": tenant_id,
+        "user_id": events[0].get("user_id"),
+        "total_risk_score": total_risk_score,
+        "risk_level": risk_level.value,
+        "flagged_events": flagged_events,
+        "event_count": len(events),
+        "analysis_notes": f"Automated analysis: {len(flagged_events)} high-risk events detected",
+        "reviewed_by": None,
+        "review_status": "PENDING" if risk_level in [RiskLevel.HIGH, RiskLevel.CRITICAL] else "AUTO_CLEARED",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc)
+    }
+    
+    db.exam_risk_profiles.update_one(
+        {"exam_attempt_id": attempt_id},
+        {"$set": profile},
+        upsert=True
+    )
+
+@app.get("/api/risk-profiles")
+async def get_risk_profiles(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    risk_level: Optional[RiskLevel] = None,
+    review_status: Optional[str] = None,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Get exam risk profiles for review"""
+    query = {"tenant_id": current_user.get("tenant_id")}
+    if risk_level:
+        query["risk_level"] = risk_level.value
+    if review_status:
+        query["review_status"] = review_status
+    
+    profiles = list(db.exam_risk_profiles.find(query).skip(skip).limit(limit).sort("total_risk_score", DESCENDING))
+    total = db.exam_risk_profiles.count_documents(query)
+    
+    # Enrich with attempt and user data
+    for profile in profiles:
+        attempt = db.exam_attempts.find_one({"_id": ObjectId(profile["exam_attempt_id"])})
+        if attempt:
+            exam = db.exams.find_one({"_id": ObjectId(attempt["exam_id"])}, {"title": 1})
+            user = db.users.find_one({"_id": ObjectId(attempt["user_id"])}, {"name": 1, "email": 1})
+            profile["exam_title"] = exam.get("title") if exam else "Unknown"
+            profile["user_name"] = user.get("name") if user else "Unknown"
+            profile["user_email"] = user.get("email") if user else "Unknown"
+    
+    return {"profiles": [serialize_doc(p) for p in profiles], "total": total}
+
+@app.get("/api/risk-profiles/{attempt_id}")
+async def get_risk_profile(
+    attempt_id: str,
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Get detailed risk profile for an attempt"""
+    profile = db.exam_risk_profiles.find_one({"exam_attempt_id": attempt_id})
+    if not profile:
+        raise HTTPException(status_code=404, detail="Risk profile not found")
+    
+    # Get all events
+    events = list(db.telemetry_events.find({"exam_attempt_id": attempt_id}).sort("created_at", ASCENDING))
+    profile["events"] = [serialize_doc(e) for e in events]
+    
+    return serialize_doc(profile)
+
+@app.put("/api/risk-profiles/{attempt_id}/review")
+async def review_risk_profile(
+    attempt_id: str,
+    review_data: dict = Body(...),
+    current_user: dict = Depends(require_roles([UserRole.MANAGER, UserRole.ADMIN]))
+):
+    """Update risk profile review status and notes"""
+    update_data = {
+        "reviewed_by": current_user["id"],
+        "review_status": review_data.get("status", "REVIEWED"),
+        "analysis_notes": review_data.get("notes", ""),
+        "updated_at": datetime.now(timezone.utc)
+    }
+    
+    result = db.exam_risk_profiles.update_one(
+        {"exam_attempt_id": attempt_id, "tenant_id": current_user.get("tenant_id")},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Risk profile not found")
+    
+    log_audit(current_user.get("tenant_id"), current_user["id"], "REVIEW", "risk_profile", attempt_id)
+    return {"message": "Risk profile reviewed successfully"}
+
+# ===========================================
+# API ROUTES - AI CREDIT USAGE
+# ===========================================
+
+@app.get("/api/ai-credits/usage")
+async def get_ai_credit_usage(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    usage_type: Optional[AIUsageType] = None,
+    current_user: dict = Depends(require_roles([UserRole.ADMIN]))
+):
+    """Get AI credit usage history (Admin only)"""
+    query = {"tenant_id": current_user.get("tenant_id")}
+    if usage_type:
+        query["usage_type"] = usage_type.value
+    
+    usage_records = list(db.ai_credit_usage.find(query).skip(skip).limit(limit).sort("created_at", DESCENDING))
+    total = db.ai_credit_usage.count_documents(query)
+    
+    # Calculate totals
+    total_credits_used = sum(r.get("credits_used", 0) for r in db.ai_credit_usage.find(query))
+    
+    return {
+        "usage": [serialize_doc(r) for r in usage_records],
+        "total": total,
+        "total_credits_used": total_credits_used
+    }
+
+@app.get("/api/ai-credits/balance")
+async def get_ai_credits_balance(current_user: dict = Depends(get_current_user)):
+    """Get current AI credits balance for tenant"""
+    subscription = db.subscriptions.find_one({"tenant_id": current_user.get("tenant_id")})
+    if not subscription:
+        return {"available_credits": 0, "used_credits": 0}
+    
+    total_credits = subscription.get("features", {}).get("ai_credits", 0)
+    used_credits = sum(
+        r.get("credits_used", 0) 
+        for r in db.ai_credit_usage.find({"tenant_id": current_user.get("tenant_id")})
+    )
+    
+    return {
+        "total_credits": total_credits,
+        "used_credits": used_credits,
+        "available_credits": max(0, total_credits - used_credits)
+    }
 
 # ===========================================
 # API ROUTES - AI (COMMENTED OUT - SEE DOCS)
