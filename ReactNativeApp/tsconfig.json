@@ -1,0 +1,1 @@
+{\n  "extends": "expo/tsconfig.base",\n  "compilerOptions": {\n    "strict": true,\n    "paths": {\n      "@/*": ["./*"]\n    },\n    "baseUrl": "."\n  },\n  "include": [\n    "**/*.ts",\n    "**/*.tsx",\n    ".expo/types/**/*.ts",\n    "expo-env.d.ts"\n  ]\n}
