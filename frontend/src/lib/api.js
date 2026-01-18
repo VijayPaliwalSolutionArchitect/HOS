@@ -172,4 +172,61 @@ export const leaderboardAPI = {
   getTop: (limit = 10) => api.get('/leaderboard', { params: { limit } }),
 };
 
+// ===========================================
+// NOTIFICATIONS API
+// ===========================================
+
+export const notificationsAPI = {
+  getAll: (params) => api.get('/notifications', { params }),
+  create: (data) => api.post('/notifications', data),
+  markAsRead: (notificationId) => api.put(`/notifications/${notificationId}/read`),
+  markAllAsRead: () => api.put('/notifications/read-all'),
+};
+
+// ===========================================
+// AUDIT LOGS API
+// ===========================================
+
+export const auditLogsAPI = {
+  getAll: (params) => api.get('/audit-logs', { params }),
+};
+
+// ===========================================
+// SUBSCRIPTIONS API
+// ===========================================
+
+export const subscriptionsAPI = {
+  getAll: () => api.get('/subscriptions'),
+  getCurrent: () => api.get('/subscriptions/current'),
+  update: (subscriptionId, data) => api.put(`/subscriptions/${subscriptionId}`, data),
+};
+
+// ===========================================
+// TELEMETRY API
+// ===========================================
+
+export const telemetryAPI = {
+  logEvent: (data) => api.post('/telemetry/events', data),
+  getEvents: (attemptId) => api.get(`/telemetry/events/${attemptId}`),
+};
+
+// ===========================================
+// RISK PROFILES API
+// ===========================================
+
+export const riskProfilesAPI = {
+  getAll: (params) => api.get('/risk-profiles', { params }),
+  getByAttempt: (attemptId) => api.get(`/risk-profiles/${attemptId}`),
+  review: (attemptId, data) => api.put(`/risk-profiles/${attemptId}/review`, data),
+};
+
+// ===========================================
+// AI CREDITS API
+// ===========================================
+
+export const aiCreditsAPI = {
+  getUsage: (params) => api.get('/ai-credits/usage', { params }),
+  getBalance: () => api.get('/ai-credits/balance'),
+};
+
 export default api;

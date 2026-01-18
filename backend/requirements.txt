@@ -7,4 +7,4 @@ python-multipart==0.0.6
 pydantic[email]==2.5.3
 python-dotenv==1.0.0
 bcrypt==4.1.2
-emergentintegrations
+# emergentintegrations  # Optional: Required only for AI features (question generation, etc.)
